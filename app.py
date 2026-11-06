@@ -6,24 +6,47 @@ import yfinance as yf
 st.set_page_config(
     page_title="ACWI 戰術輪動策略回測", layout="wide"
 )
-st.title("📊 ETF Canary 戰術輪動與 ACWI 基準回測系統")
 
-# 1. 設定標的與區間
+# ---------------------------------------------------------
+# 1. 標的與基準參數設定
+# ---------------------------------------------------------
 tickers = ["IVV", "VGK", "EWJ", "IAPD", "IEMG", "BIL"]
 start_date = "2013-01-01"
 end_date = "2026-11-01"
 
-# 基準配比 (IVV 63%, VGK 13%, EWJ 5%, IAPD 9%, IEMG 11%, BIL 0%)
+# 靜態 ACWI 基準對標配比 (63% IVV, 13% VGK, 5% EWJ, 9% IAPD, 11% IEMG, 0% BIL)
 benchmark_weights = np.array([0.63, 0.13, 0.05, 0.09, 0.11, 0.00])
 
+# ---------------------------------------------------------
+# 2. 標題與策略邏輯 Tag 說明
+# ---------------------------------------------------------
+st.title("📊 ETF Canary 戰術輪動與 ACWI 基準回測系統")
 
-# 2. 數據下載與安全解析 (針對 yfinance 新舊版本解包)
+with st.expander("🏷️ 點此查看：策略邏輯與金絲雀（Canary）機制說明"):
+    st.markdown(
+        """
+    ### 📌 策略核心邏輯 (US-Core & Non-US Canary TAA)
+    本策略利用美股大盤 **IVV** 高勝率與強勁 ROE 的特性作為核心，並利用波動較大的非美股市 (**IEMG**、**IAPD**) 作為預警的金絲雀 (Canary) 指標。
+    
+    * **🟢 Risk-On (全球牛市 / 雙綠燈)**：
+      * **條件**：IEMG 與 IAPD 收盤價皆高於其 200 日移動平均線 (200MA)。
+      * **配置**：`IVV 70%` | `VGK 10%` | `EWJ 5%` | `IAPD 5%` | `IEMG 10%` | `BIL 0%`
+    * **🟡 Risk-Neutral (防守切換 / 單綠燈)**：
+      * **條件**：IEMG 與 IAPD 僅有其中 1 支在 200MA 之上。
+      * **配置**：`IVV 80%` | `VGK 10%` | `EWJ 10%` | `IAPD 0%` | `IEMG 0%` | `BIL 0%`
+    * **🔴 Risk-Off (避險防衛 / 雙紅燈)**：
+      * **條件**：IEMG 與 IAPD 皆跌破 200MA。
+      * **配置**：`IVV 50%` | `BIL (超短期美債/現金) 50%` | 其餘 0%
+    """
+    )
+
+
+# ---------------------------------------------------------
+# 3. 數據下載與安全解析 (快取保護)
+# ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def load_etf_data(symbols, start, end):
-    # 下載數據，設定 auto_adjust=True 取得自動調整後股價
     raw_df = yf.download(symbols, start=start, end=end, auto_adjust=True)
-
-    # 處理 MultiIndex 結構 (新版 yfinance)
     if isinstance(raw_df.columns, pd.MultiIndex):
         if "Close" in raw_df.columns.levels[0]:
             df = raw_df["Close"]
@@ -31,13 +54,11 @@ def load_etf_data(symbols, start, end):
             df = raw_df.xs(raw_df.columns.levels[0][0], axis=1, level=0)
     else:
         df = raw_df
-
-    # 確保所有要求的 symbols 都在欄位中並補值
     df = df.reindex(columns=symbols).ffill().bfill()
     return df
 
 
-with st.spinner("正在下載並處理 ETF 歷史數據..."):
+with st.spinner("正在讀取 ETF 歷史股價數據並計算金絲雀訊號..."):
     try:
         data = load_etf_data(tickers, start_date, end_date)
     except Exception as e:
@@ -45,70 +66,95 @@ with st.spinner("正在下載並處理 ETF 歷史數據..."):
         st.stop()
 
 if data.empty or len(data) < 200:
-    st.error("❌ 無法取得足夠的歷史數據，請檢查網路連線或時間設定。")
+    st.error("❌ 歷史數據不足，無法完成回測。")
     st.stop()
 
-# 3. 計算 200 日移動平均線 (200MA) 與每日報酬率
+# ---------------------------------------------------------
+# 4. 逐日與月度戰術回測計算
+# ---------------------------------------------------------
 ma200 = data.rolling(window=200).mean()
 returns = data.pct_change().fillna(0)
 
-# 4. 逐日回測計算
 returns_matrix = returns.values
 data_matrix = data.values
 ma200_matrix = ma200.values
 
-strategy_returns = []
-benchmark_returns = []
 dates = data.index[200:]
-
-# Ticker 索引位置: IVV(0), VGK(1), EWJ(2), IAPD(3), IEMG(4), BIL(5)
 idx_iapd = 3
 idx_iemg = 4
 
+daily_records = []
+
 for i in range(200, len(data)):
-    # Canary 訊號 (IEMG 與 IAPD 是否位於 200MA 之上)
+    d = data.index[i]
     canary_iemg = data_matrix[i, idx_iemg] > ma200_matrix[i, idx_iemg]
     canary_iapd = data_matrix[i, idx_iapd] > ma200_matrix[i, idx_iapd]
-
     daily_ret = returns_matrix[i]
 
-    # 基準報酬
+    # ACWI 基準報酬
     bm_ret = np.dot(daily_ret, benchmark_weights)
-    benchmark_returns.append(bm_ret)
 
-    # 動態策略權重
+    # 決定動態策略權重
     if canary_iemg and canary_iapd:
-        # Risk-On (雙綠燈): 美股加碼至 70%
+        mode = "Risk-On (🟢🟢)"
         strat_w = np.array([0.70, 0.10, 0.05, 0.05, 0.10, 0.00])
     elif not canary_iemg and not canary_iapd:
-        # Risk-Off (雙紅燈): 50% IVV + 50% BIL (避險)
+        mode = "Risk-Off (🔴🔴)"
         strat_w = np.array([0.50, 0.00, 0.00, 0.00, 0.00, 0.50])
     else:
-        # Risk-Neutral (單綠燈): 80% IVV + 10% VGK + 10% EWJ
+        mode = "Risk-Neutral (🟡)"
         strat_w = np.array([0.80, 0.10, 0.10, 0.00, 0.00, 0.00])
 
     strat_ret = np.dot(daily_ret, strat_w)
-    strategy_returns.append(strat_ret)
 
-# 5. 累積淨值計算
-strat_ret_series = pd.Series(strategy_returns, index=dates)
-bm_ret_series = pd.Series(benchmark_returns, index=dates)
+    daily_records.append(
+        {
+            "Date": d,
+            "Mode": mode,
+            "Canary_IEMG": "🟢 均線上" if canary_iemg else "🔴 均線下",
+            "Canary_IAPD": "🟢 均線上" if canary_iapd else "🔴 均線下",
+            "Strat_Ret": strat_ret,
+            "BM_Ret": bm_ret,
+            "W_IVV": strat_w[0],
+            "W_VGK": strat_w[1],
+            "W_EWJ": strat_w[2],
+            "W_IAPD": strat_w[3],
+            "W_IEMG": strat_w[4],
+            "W_BIL": strat_w[5],
+        }
+    )
 
-strat_cum = (1 + strat_ret_series).cumprod()
-bm_cum = (1 + bm_ret_series).cumprod()
+df_daily = pd.DataFrame(daily_records).set_index("Date")
 
-# 6. 績效統計
+# 累積總淨值
+strat_cum = (1 + df_daily["Strat_Ret"]).cumprod()
+bm_cum = (1 + df_daily["BM_Ret"]).cumprod()
+
+# ---------------------------------------------------------
+# 5. 畫面呈現：頂部 KPI 指標
+# ---------------------------------------------------------
 strat_total_return = (strat_cum.iloc[-1] - 1) * 100
 bm_total_return = (bm_cum.iloc[-1] - 1) * 100
 
-# 月度勝率計算 (使用 'ME' 避免舊語法警告)
-monthly_strat = strat_ret_series.resample("ME").apply(
-    lambda x: (1 + x).prod() - 1
+# 月度統計與勝率
+monthly_df = df_daily.resample("ME").agg(
+    {
+        "Strat_Ret": lambda x: (1 + x).prod() - 1,
+        "BM_Ret": lambda x: (1 + x).prod() - 1,
+        "Mode": "last",
+        "Canary_IEMG": "last",
+        "Canary_IAPD": "last",
+        "W_IVV": "last",
+        "W_VGK": "last",
+        "W_EWJ": "last",
+        "W_IAPD": "last",
+        "W_IEMG": "last",
+        "W_BIL": "last",
+    }
 )
-monthly_bm = bm_ret_series.resample("ME").apply(lambda x: (1 + x).prod() - 1)
-win_rate = (monthly_strat > monthly_bm).mean() * 100
 
-# 7. Streamlit 介面呈現
+win_rate = (monthly_df["Strat_Ret"] > monthly_df["BM_Ret"]).mean() * 100
+
 col1, col2, col3 = st.columns(3)
 col1.metric("策略累積總報酬", f"{strat_total_return:.2f}%")
 col2.metric("ACWI 基準總報酬", f"{bm_total_return:.2f}%")
@@ -119,3 +165,72 @@ df_plot = pd.DataFrame(
     {"Canary 戰術輪動策略": strat_cum, "ACWI 基準對標": bm_cum}
 )
 st.line_chart(df_plot)
+
+# ---------------------------------------------------------
+# 6. 最新訊號與詳細計算過程表格 (Monthly Breakdown)
+# ---------------------------------------------------------
+st.write("---")
+st.subheader("🔔 當前最新金絲雀訊號與推薦配置")
+latest_rec = df_daily.iloc[-1]
+
+c_rec1, c_rec2, c_rec3 = st.columns(3)
+c_rec1.info(f"**最新市場狀態**：{latest_rec['Mode']}")
+c_rec2.write(
+    f"**IEMG Canary**: {latest_rec['Canary_IEMG']} | **IAPD Canary**: {latest_rec['Canary_IAPD']}"
+)
+c_rec3.write(
+    f"**建議持股比例**：IVV {latest_rec['W_IVV']*100:.0f}% | VGK {latest_rec['W_VGK']*100:.0f}% | EWJ {latest_rec['W_EWJ']*100:.0f}% | IAPD {latest_rec['W_IAPD']*100:.0f}% | IEMG {latest_rec['W_IEMG']*100:.0f}% | BIL {latest_rec['W_BIL']*100:.0f}%"
+)
+
+st.write("---")
+st.subheader("📋 每月詳細策略報酬與配置歷程 (Monthly History Breakdown)")
+
+# Formatting 月度表格
+monthly_display = monthly_df.copy()
+monthly_display["策略月報酬"] = (
+    monthly_display["Strat_Ret"] * 100
+).map("{:.2f}%".format)
+monthly_display["ACWI 月報酬"] = (
+    monthly_display["BM_Ret"] * 100
+).map("{:.2f}%".format)
+monthly_display["月度勝負"] = np.where(
+    monthly_display["Strat_Ret"] > monthly_display["BM_Ret"],
+    "🏆 擊敗 ACWI",
+    "🔻 落後 ACWI",
+)
+
+# 格式化權重顯示
+for col in ["W_IVV", "W_VGK", "W_EWJ", "W_IAPD", "W_IEMG", "W_BIL"]:
+    monthly_display[col] = (monthly_display[col] * 100).map("{:.0f}%".format)
+
+monthly_display = monthly_display.rename(
+    columns={
+        "Mode": "市場狀態",
+        "Canary_IEMG": "IEMG 訊號",
+        "Canary_IAPD": "IAPD 訊號",
+        "W_IVV": "IVV 權重",
+        "W_VGK": "VGK 權重",
+        "W_EWJ": "EWJ 權重",
+        "W_IAPD": "IAPD 權重",
+        "W_IEMG": "IEMG 權重",
+        "W_BIL": "BIL 權重",
+    }
+)
+
+table_columns = [
+    "市場狀態",
+    "策略月報酬",
+    "ACWI 月報酬",
+    "月度勝負",
+    "IEMG 訊號",
+    "IAPD 訊號",
+    "IVV 權重",
+    "VGK 權重",
+    "EWJ 權重",
+    "IAPD 權重",
+    "IEMG 權重",
+    "BIL 權重",
+]
+
+# 最新月份擺在最上方方便檢視
+st.dataframe(monthly_display[table_columns].sort_index(ascending=False), use_container_width=True)
