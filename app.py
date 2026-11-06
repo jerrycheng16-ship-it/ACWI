@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 側邊欄：策略選擇與通用時間設定
+# 側邊欄：策略選擇與時間設定
 # ---------------------------------------------------------
 st.sidebar.title("🎯 策略與參數控制")
 strategy_choice = st.sidebar.radio(
@@ -57,12 +57,13 @@ def get_drawdown_series(cum_returns):
 
 
 # =========================================================
-# 策略一：ACWI 全球戰術輪動策略
+# 策略一：ACWI 全球戰術輪動策略 (以 EPP 替代原 IAPD)
 # =========================================================
 if "ACWI" in strategy_choice:
     st.title("🌐 ACWI 全球戰術輪動與基準對標系統")
 
-    tickers_acwi = ["IVV", "VGK", "EWJ", "IAPD", "IEMG", "BIL"]
+    # 標的改用 EPP (亞太不含日本) 替換 IAPD
+    tickers_acwi = ["IVV", "VGK", "EWJ", "EPP", "IEMG", "BIL"]
     benchmark_weights_acwi = pd.Series(
         [0.63, 0.13, 0.05, 0.09, 0.11, 0.00], index=tickers_acwi
     )
@@ -71,12 +72,12 @@ if "ACWI" in strategy_choice:
         st.markdown(
             """
         ### 📌 策略核心邏輯 (US-Core & Non-US Canary TAA)
-        以 **IVV** 作為核心，並利用 **IEMG (新興)** 與 **IAPD (亞太高股息)** 作為全球流動性與避險的金絲雀 (Canary) 指標。
-        * **🟢 Risk-On (全球牛市 / 雙綠燈)**：IEMG 與 IAPD 收盤價皆高於 200MA。
-          * 配置：`IVV 70%` | `VGK 10%` | `EWJ 5%` | `IAPD 5%` | `IEMG 10%` | `BIL 0%`
-        * **🟡 Risk-Neutral (防守切換 / 單綠燈)**：IEMG 與 IAPD 僅有 1 支在 200MA 之上。
-          * 配置：`IVV 80%` | `VGK 10%` | `EWJ 10%` | `IAPD 0%` | `IEMG 0%` | `BIL 0%`
-        * **🔴 Risk-Off (避險防衛 / 雙紅燈)**：IEMG 與 IAPD 皆跌破 200MA。
+        以 **IVV** 作為核心，並利用 **IEMG (新興)** 與 **EPP (亞太不含日本)** 作為全球流動性與避險的金絲雀 (Canary) 指標。
+        * **🟢 Risk-On (全球牛市 / 雙綠燈)**：IEMG 與 EPP 收盤價皆高於 200MA。
+          * 配置：`IVV 70%` | `VGK 10%` | `EWJ 5%` | `EPP 5%` | `IEMG 10%` | `BIL 0%`
+        * **🟡 Risk-Neutral (防守切換 / 單綠燈)**：IEMG 與 EPP 僅有 1 支在 200MA 之上。
+          * 配置：`IVV 80%` | `VGK 10%` | `EWJ 10%` | `EPP 0%` | `IEMG 0%` | `BIL 0%`
+        * **🔴 Risk-Off (避險防衛 / 雙紅燈)**：IEMG 與 EPP 皆跌破 200MA。
           * 配置：`IVV 50%` | `BIL 50%` | 其餘 0%
         """
         )
@@ -96,24 +97,24 @@ if "ACWI" in strategy_choice:
     returns = data.pct_change().fillna(0)
 
     canary_iemg_series = data["IEMG"] > ma200["IEMG"]
-    canary_iapd_series = data["IAPD"] > ma200["IAPD"]
+    canary_epp_series = data["EPP"] > ma200["EPP"]
 
     dates = data.index[200:]
     daily_records = []
 
     for d in dates:
         c_iemg = canary_iemg_series.loc[d]
-        c_iapd = canary_iapd_series.loc[d]
+        c_epp = canary_epp_series.loc[d]
         daily_ret = returns.loc[d]
 
         bm_ret = (daily_ret * benchmark_weights_acwi).sum()
 
-        if c_iemg and c_iapd:
+        if c_iemg and c_epp:
             mode = "Risk-On (🟢🟢)"
             strat_w = pd.Series(
                 [0.70, 0.10, 0.05, 0.05, 0.10, 0.00], index=tickers_acwi
             )
-        elif not c_iemg and not c_iapd:
+        elif not c_iemg and not c_epp:
             mode = "Risk-Off (🔴🔴)"
             strat_w = pd.Series(
                 [0.50, 0.00, 0.00, 0.00, 0.00, 0.50], index=tickers_acwi
@@ -131,13 +132,13 @@ if "ACWI" in strategy_choice:
                 "Date": d,
                 "Mode": mode,
                 "Canary_IEMG": "🟢 均線上" if c_iemg else "🔴 均線下",
-                "Canary_IAPD": "🟢 均線上" if c_iapd else "🔴 均線下",
+                "Canary_EPP": "🟢 均線上" if c_epp else "🔴 均線下",
                 "Strat_Ret": strat_ret,
                 "BM_Ret": bm_ret,
                 "W_IVV": strat_w["IVV"],
                 "W_VGK": strat_w["VGK"],
                 "W_EWJ": strat_w["EWJ"],
-                "W_IAPD": strat_w["IAPD"],
+                "W_EPP": strat_w["EPP"],
                 "W_IEMG": strat_w["IEMG"],
                 "W_BIL": strat_w["BIL"],
             }
@@ -169,11 +170,11 @@ if "ACWI" in strategy_choice:
             "BM_Ret": lambda x: (1 + x).prod() - 1,
             "Mode": "last",
             "Canary_IEMG": "last",
-            "Canary_IAPD": "last",
+            "Canary_EPP": "last",
             "W_IVV": "last",
             "W_VGK": "last",
             "W_EWJ": "last",
-            "W_IAPD": "last",
+            "W_EPP": "last",
             "W_IEMG": "last",
             "W_BIL": "last",
         }
@@ -217,14 +218,14 @@ if "ACWI" in strategy_choice:
     )
 
     st.write("---")
-    st.subheader("🔍 金絲雀數據對照：IAPD & IEMG 股價 vs 200MA")
-    tab1, tab2 = st.tabs(["IAPD (亞太高股息)", "IEMG (新興市場)"])
+    st.subheader("🔍 金絲雀數據對照：EPP & IEMG 股價 vs 200MA")
+    tab1, tab2 = st.tabs(["EPP (亞太不含日本)", "IEMG (新興市場)"])
     with tab1:
         st.line_chart(
             pd.DataFrame(
                 {
-                    "IAPD 收盤價": data["IAPD"].loc[dates],
-                    "IAPD 200MA": ma200["IAPD"].loc[dates],
+                    "EPP 收盤價": data["EPP"].loc[dates],
+                    "EPP 200MA": ma200["EPP"].loc[dates],
                 }
             )
         )
@@ -243,10 +244,10 @@ if "ACWI" in strategy_choice:
     c_rec1, c_rec2, c_rec3 = st.columns(3)
     c_rec1.info(f"**最新市場狀態**：{latest_rec['Mode']}")
     c_rec2.write(
-        f"**IEMG Canary**: {latest_rec['Canary_IEMG']} | **IAPD Canary**: {latest_rec['Canary_IAPD']}"
+        f"**IEMG Canary**: {latest_rec['Canary_IEMG']} | **EPP Canary**: {latest_rec['Canary_EPP']}"
     )
     c_rec3.write(
-        f"**建議持股比例**：IVV {latest_rec['W_IVV']*100:.0f}% | VGK {latest_rec['W_VGK']*100:.0f}% | EWJ {latest_rec['W_EWJ']*100:.0f}% | IAPD {latest_rec['W_IAPD']*100:.0f}% | IEMG {latest_rec['W_IEMG']*100:.0f}% | BIL {latest_rec['W_BIL']*100:.0f}%"
+        f"**建議持股比例**：IVV {latest_rec['W_IVV']*100:.0f}% | VGK {latest_rec['W_VGK']*100:.0f}% | EWJ {latest_rec['W_EWJ']*100:.0f}% | EPP {latest_rec['W_EPP']*100:.0f}% | IEMG {latest_rec['W_IEMG']*100:.0f}% | BIL {latest_rec['W_BIL']*100:.0f}%"
     )
 
     st.write("---")
@@ -271,7 +272,7 @@ if "ACWI" in strategy_choice:
         "W_IVV",
         "W_VGK",
         "W_EWJ",
-        "W_IAPD",
+        "W_EPP",
         "W_IEMG",
         "W_BIL",
     ]:
@@ -283,11 +284,11 @@ if "ACWI" in strategy_choice:
         columns={
             "Mode": "市場狀態",
             "Canary_IEMG": "IEMG 訊號",
-            "Canary_IAPD": "IAPD 訊號",
+            "Canary_EPP": "EPP 訊號",
             "W_IVV": "IVV 權重",
             "W_VGK": "VGK 權重",
             "W_EWJ": "EWJ 權重",
-            "W_IAPD": "IAPD 權重",
+            "W_EPP": "EPP 權重",
             "W_IEMG": "IEMG 權重",
             "W_BIL": "BIL 權重",
         }
@@ -299,11 +300,11 @@ if "ACWI" in strategy_choice:
         "ACWI 月報酬",
         "月度勝負",
         "IEMG 訊號",
-        "IAPD 訊號",
+        "EPP 訊號",
         "IVV 權重",
         "VGK 權重",
         "EWJ 權重",
-        "IAPD 權重",
+        "EPP 權重",
         "IEMG 權重",
         "BIL 權重",
     ]
@@ -463,7 +464,7 @@ else:
         )
     )
 
-    st.write("### 📉 風險水庫：水面下回撤走勢圖 (Drawdown %)")
+    st.write("### 📉 風興水庫：水面下回撤走勢圖 (Drawdown %)")
     st.line_chart(
         pd.DataFrame(
             {
