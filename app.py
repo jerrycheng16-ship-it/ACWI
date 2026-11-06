@@ -612,4 +612,150 @@ else:
         agg_dict[f"R_{t}"] = lambda x, symbol=t: (1 + x).prod() - 1
 
     monthly_df = df_daily.resample("ME").agg(agg_dict)
-    win_rate = (monthly_df["Strat_Ret"] > monthly_df["VTI
+    win_rate = (monthly_df["Strat_Ret"] > monthly_df["VTI_Ret"]).mean() * 100
+
+    # 5. 畫面呈現
+    col1, col2, col3 = st.columns(3)
+    col1.metric(
+        "相對 RSI 策略總報酬",
+        f"{strat_total_return:.2f}%",
+        f"年化 CAGR: {strat_cagr:.2f}%",
+    )
+    col2.metric(
+        "VTI 買入持有總報酬",
+        f"{vti_total_return:.2f}%",
+        f"年化 CAGR: {vti_cagr:.2f}%",
+    )
+    col3.metric("月度超越 VTI 勝率", f"{win_rate:.2f}%")
+
+    st.write("")
+    col4, col5 = st.columns(2)
+    col4.metric("策略最大回撤 (Max Drawdown)", f"{strat_mdd:.2f}%")
+    col5.metric("VTI 基準最大回撤 (Max Drawdown)", f"{vti_mdd:.2f}%")
+
+    st.write("### 📈 累積淨值走勢比較 (基期 = 1.0)")
+    st.line_chart(
+        pd.DataFrame(
+            {
+                "相對 RSI 均值回歸策略": strat_cum,
+                "VTI Buy & Hold 基準": vti_cum,
+            }
+        )
+    )
+
+    st.write("### 📉 風險水庫：水面下回撤走勢圖 (Drawdown %)")
+    st.line_chart(
+        pd.DataFrame(
+            {
+                "策略 Drawdown (%)": strat_dd_series,
+                "VTI 基準 Drawdown (%)": vti_dd_series,
+            }
+        )
+    )
+
+    # VTI 最新訊號卡片
+    st.write("---")
+    st.subheader("🔔 當前 11 月最新交易訊號與建倉推薦配置 (即時盤後)")
+    latest_date_vti = data.index[-1]
+    latest_mode_vti = df_signals.loc[latest_date_vti, "Mode"]
+    latest_rsi_smh_val = rel_rsi_smh.loc[latest_date_vti]
+    latest_rsi_iwm_val = rel_rsi_iwm.loc[latest_date_vti]
+    latest_w_vti = df_w_target.loc[latest_date_vti]
+
+    v_rec1, v_rec2, v_rec3 = st.columns(3)
+    v_rec1.info(
+        f"**最新交易日**: {latest_date_vti.strftime('%Y-%m-%d')}\n\n**當前市場模式**: {latest_mode_vti}"
+    )
+    v_rec2.warning(
+        f"**SMH/VTI 相對 RSI**: {latest_rsi_smh_val:.1f}\n\n**IWM/VTI 相對 RSI**: {latest_rsi_iwm_val:.1f}"
+    )
+    v_rec3.success(
+        f"**建議 11 月配置比例**:\n\nIVV: {latest_w_vti['IVV']*100:.0f}% | SMH: {latest_w_vti['SMH']*100:.0f}%\n\nIWM: {latest_w_vti['IWM']*100:.0f}% | BIL: {latest_w_vti['BIL']*100:.0f}%"
+    )
+
+    # 6. 相對 RSI 圖表
+    st.write("---")
+    st.subheader(
+        "📊 相對強度 RSI (Ratio RSI) 歷史對照圖與進/出場門檻"
+    )
+    tab_rel1, tab_rel2 = st.tabs(["SMH / VTI 相對 RSI", "IWM / VTI 相對 RSI"])
+
+    with tab_rel1:
+        st.line_chart(
+            pd.DataFrame(
+                {
+                    "SMH/VTI 相對 14日 RSI": rel_rsi_smh.loc[exec_dates],
+                    "超跌抄底進場門檻": rel_rsi_oversold,
+                    "超買獲利了結門檻": rel_rsi_overbought,
+                }
+            )
+        )
+
+    with tab_rel2:
+        st.line_chart(
+            pd.DataFrame(
+                {
+                    "IWM/VTI 相對 14日 RSI": rel_rsi_iwm.loc[exec_dates],
+                    "超跌抄底進場門檻": rel_rsi_oversold,
+                    "超買獲利了結門檻": rel_rsi_overbought,
+                }
+            )
+        )
+
+    st.write("---")
+    st.subheader(
+        "📋 每月詳細策略報酬與各 ETF 獨立月報酬歷程 (T+1 執行對齊)"
+    )
+
+    monthly_display = monthly_df.copy()
+    monthly_display.index = monthly_display.index.strftime("%Y-%m-%d")
+
+    monthly_display["策略月報酬"] = (
+        monthly_display["Strat_Ret"] * 100
+    ).map("{:.2f}%".format)
+    monthly_display["VTI 月報酬"] = (
+        monthly_display["VTI_Ret"] * 100
+    ).map("{:.2f}%".format)
+    monthly_display["月度勝負"] = np.where(
+        monthly_display["Strat_Ret"] > monthly_display["VTI_Ret"],
+        "🏆 擊敗 VTI",
+        "🔻 落後 VTI",
+    )
+
+    for t in tickers_vti:
+        monthly_display[f"{t} 月報酬"] = (
+            monthly_display[f"R_{t}"] * 100
+        ).map("{:.2f}%".format)
+        if t != "VTI":
+            monthly_display[f"W_{t}"] = (
+                monthly_display[f"W_{t}"] * 100
+            ).map("{:.0f}%".format)
+
+    monthly_display = monthly_display.rename(
+        columns={
+            "Mode": "當月執行模式",
+            "W_IVV": "IVV 權重",
+            "W_SMH": "SMH 權重",
+            "W_IWM": "IWM 權重",
+            "W_BIL": "BIL 權重",
+        }
+    )
+
+    table_cols = [
+        "當月執行模式",
+        "策略月報酬",
+        "VTI 月報酬",
+        "月度勝負",
+        "IVV 月報酬",
+        "SMH 月報酬",
+        "IWM 月報酬",
+        "BIL 月報酬",
+        "IVV 權重",
+        "SMH 權重",
+        "IWM 權重",
+        "BIL 權重",
+    ]
+    st.dataframe(
+        monthly_display[table_cols].sort_index(ascending=False),
+        use_container_width=True,
+    )
