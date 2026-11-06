@@ -105,7 +105,6 @@ def get_drawdown_series(cum_returns):
 if "ACWI" in strategy_choice:
     st.title("🌐 ACWI 全球戰術輪動對標系統 (嚴格無前視偏誤對齊)")
 
-    # 使用 EPP (亞太不含日本) 完美替代 IAPD
     tickers_acwi = ["IVV", "VGK", "EWJ", "EPP", "IEMG", "BIL"]
     benchmark_weights_acwi = pd.Series(
         [0.63, 0.13, 0.05, 0.09, 0.11, 0.00], index=tickers_acwi
@@ -236,13 +235,13 @@ if "ACWI" in strategy_choice:
     strat_mdd = strat_dd_series.min()
     bm_mdd = bm_dd_series.min()
 
-    # 月度彙整
+    # 月度彙整 (統一使用 first 對齊當月第一天實際執行的權重與模式)
     agg_dict = {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
         "BM_Ret": lambda x: (1 + x).prod() - 1,
         "Mode": "first",
-        "Canary_IEMG": "last",
-        "Canary_EPP": "last",
+        "Canary_IEMG": "first",
+        "Canary_EPP": "first",
         "W_IVV": "first",
         "W_VGK": "first",
         "W_EWJ": "first",
@@ -418,11 +417,11 @@ else:
         st.markdown(
             f"""
         ### 📌 相對強度 RSI 策略設計原理 (Relative Strength RSI Reversion)
-        本策略監控 **「相對大盤 (VTI) 的比值 RSI」**[cite: 9]：
-        * **`SMH / VTI Ratio`**：評估半導體相較於整體美股的超買/超賣強度[cite: 9]。
-        * **`IWM / VTI Ratio`**：評估小型股相較於整體美股的強弱輪動[cite: 9]。
+        本策略監控 **「相對大盤 (VTI) 的比值 RSI」**：
+        * **`SMH / VTI Ratio`**：評估半導體相較於整體美股的超買/超賣強度。
+        * **`IWM / VTI Ratio`**：評估小型股相較於整體美股的強弱輪動。
         * **常態持股 (無抄底訊號)**：持有 `85% IVV` (高勝率核心) + `15% SMH` (常態動能)。
-        * **抄底機制**：當 `SMH/VTI` 的 RSI < `{rel_rsi_oversold}`，且 SMH 股價在 `{ma_window}MA` 之上時，**將 SMH 加碼至 {int(smh_add_weight*100)}% (IVV 自動降至 {int((1-smh_add_weight)*100)}%)**。
+        * **抄底機制**：當 `SMH/VTI` 的 RSI < `{rel_rsi_oversold}`，且 SMH 股價在 `{ma_window}MA` 之上時，**將 SMH 加碼至 {int(smh_add_weight*100)}% (IVV 自動降至 {int(round((1-smh_add_weight)*100, 0))}%)**。
         * **無前視偏誤 (No Look-Ahead Bias)**：嚴格實施 **T+1 日滯後執行 (Shift-1)**。
         """
         )
@@ -550,7 +549,7 @@ else:
     strat_mdd = strat_dd_series.min()
     vti_mdd = vti_dd_series.min()
 
-    # 月度統計
+    # 月度統計 (統一使用 first 對齊當月第一天實際執行的權重與模式)
     agg_dict = {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
         "VTI_Ret": lambda x: (1 + x).prod() - 1,
