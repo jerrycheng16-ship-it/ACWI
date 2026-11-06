@@ -12,7 +12,7 @@ tickers = ["IVV", "VGK", "EWJ", "IAPD", "IEMG", "BIL"]
 start_date = "2013-01-01"
 end_date = "2026-11-01"
 
-# 靜態 ACWI 基準配比
+# 靜態 ACWI 基準對標配比 (63% IVV, 13% VGK, 5% EWJ, 9% IAPD, 11% IEMG, 0% BIL)
 benchmark_weights = pd.Series([0.63, 0.13, 0.05, 0.09, 0.11, 0.00], index=tickers)
 
 # ---------------------------------------------------------
@@ -31,7 +31,7 @@ with st.expander("🏷️ 點此查看：策略邏輯與金絲雀（Canary）機
     """)
 
 # ---------------------------------------------------------
-# 3. 精準數據下載與修復 (避免填補無效歷史價格)
+# 3. 數據下載與安全解析 (穩定快取)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def load_etf_data(symbols, start, end):
@@ -44,11 +44,11 @@ def load_etf_data(symbols, start, end):
     else:
         df = raw_df
     
-    # 僅做個股內部的向前填補 (ffill)，剔除休市日，不盲目 bfill 毀壞 200MA
-    df = df[symbols].ffill().dropna()
+    # 確保所有標的皆存在且對齊，先向前補值再向後補值，避免整行拉掉
+    df = df.reindex(columns=symbols).ffill().bfill()
     return df
 
-with st.spinner("正在精準下載 ETF 數據並驗證 200MA 均線..."):
+with st.spinner("正在下載 ETF 歷史股價數據並驗證金絲雀訊號..."):
     try:
         data = load_etf_data(tickers, start_date, end_date)
     except Exception as e:
@@ -65,7 +65,7 @@ if data.empty or len(data) < 200:
 ma200 = data.rolling(window=200).mean()
 returns = data.pct_change().fillna(0)
 
-# 金絲雀訊號布林邏輯 (直接指定 Ticker 欄位)
+# 使用完整的 Series 直接判定金絲雀訊號，無維度或索引錯位風險
 canary_iemg_series = data["IEMG"] > ma200["IEMG"]
 canary_iapd_series = data["IAPD"] > ma200["IAPD"]
 
@@ -149,7 +149,7 @@ monthly_df = df_daily.resample("ME").agg({
 win_rate = (monthly_df["Strat_Ret"] > monthly_df["BM_Ret"]).mean() * 100
 
 # ---------------------------------------------------------
-# 6. 畫面呈現：KPI 指標與核心圖表
+# 6. 畫面呈現：KPI 指標卡與核心走勢圖
 # ---------------------------------------------------------
 col1, col2, col3 = st.columns(3)
 col1.metric("策略累積總報酬", f"{strat_total_return:.2f}%", f"年化 CAGR: {strat_cagr:.2f}%")
@@ -168,18 +168,17 @@ st.write("### 📉 風險水庫：水面下回撤走勢圖 (Drawdown %)")
 st.line_chart(pd.DataFrame({"Canary 策略 Drawdown (%)": strat_dd_series, "ACWI 基準 Drawdown (%)": bm_dd_series}))
 
 # ---------------------------------------------------------
-# 7. 驗證金絲雀：IAPD / IEMG 股價 vs 200MA 對照圖
+# 7. 金絲雀驗證走勢圖 (IAPD / IEMG)
 # ---------------------------------------------------------
 st.write("---")
-st.subheader("🔍 金絲雀數據驗證：IAPD 股價 vs 200MA 走勢對照")
-df_iapd_verify = pd.DataFrame({
+st.subheader("🔍 金絲雀數據對照：IAPD 股價 vs 200MA")
+st.line_chart(pd.DataFrame({
     "IAPD 收盤價 (USD)": data["IAPD"].loc[dates],
     "IAPD 200日均線 (200MA)": ma200["IAPD"].loc[dates]
-})
-st.line_chart(df_iapd_verify)
+}))
 
 # ---------------------------------------------------------
-# 8. 當前最新訊號與表格歷史
+# 8. 最新狀態與詳細月份歷史表格
 # ---------------------------------------------------------
 st.subheader("🔔 當前最新金絲雀訊號與推薦配置")
 latest_rec = df_daily.iloc[-1]
