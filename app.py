@@ -203,4 +203,57 @@ st.write("---")
 st.subheader("🔔 當前最新金絲雀訊號與推薦配置")
 latest_rec = df_daily.iloc[-1]
 
-c_rec1, c_rec2, c_rec3 = st.columns(
+c_rec1, c_rec2, c_rec3 = st.columns(3)
+c_rec1.info(f"**最新市場狀態**：{latest_rec['Mode']}")
+c_rec2.write(
+    f"**IEMG Canary**: {latest_rec['Canary_IEMG']} | **IAPD Canary**: {latest_rec['Canary_IAPD']}"
+)
+c_rec3.write(
+    f"**建議持股比例**：IVV {latest_rec['W_IVV']*100:.0f}% | VGK {latest_rec['W_VGK']*100:.0f}% | EWJ {latest_rec['W_EWJ']*100:.0f}% | IAPD {latest_rec['W_IAPD']*100:.0f}% | IEMG {latest_rec['W_IEMG']*100:.0f}% | BIL {latest_rec['W_BIL']*100:.0f}%"
+)
+
+st.write("---")
+st.subheader("📋 每月詳細策略報酬與配置歷程 (Monthly History Breakdown)")
+
+monthly_display = monthly_df.copy()
+monthly_display["策略月報酬"] = (monthly_display["Strat_Ret"] * 100).map("{:.2f}%".format)
+monthly_display["ACWI 月報酬"] = (monthly_display["BM_Ret"] * 100).map("{:.2f}%".format)
+monthly_display["月度勝負"] = np.where(
+    monthly_display["Strat_Ret"] > monthly_display["BM_Ret"],
+    "🏆 擊敗 ACWI",
+    "🔻 落後 ACWI",
+)
+
+for col in ["W_IVV", "W_VGK", "W_EWJ", "W_IAPD", "W_IEMG", "W_BIL"]:
+    monthly_display[col] = (monthly_display[col] * 100).map("{:.0f}%".format)
+
+monthly_display = monthly_display.rename(
+    columns={
+        "Mode": "市場狀態",
+        "Canary_IEMG": "IEMG 訊號",
+        "Canary_IAPD": "IAPD 訊號",
+        "W_IVV": "IVV 權重",
+        "W_VGK": "VGK 權重",
+        "W_EWJ": "EWJ 權重",
+        "W_IAPD": "IAPD 權重",
+        "W_IEMG": "IEMG 權重",
+        "W_BIL": "BIL 權重",
+    }
+)
+
+table_columns = [
+    "市場狀態",
+    "策略月報酬",
+    "ACWI 月報酬",
+    "月度勝負",
+    "IEMG 訊號",
+    "IAPD 訊號",
+    "IVV 權重",
+    "VGK 權重",
+    "EWJ 權重",
+    "IAPD 權重",
+    "IEMG 權重",
+    "BIL 權重",
+]
+
+st.dataframe(monthly_display[table_columns].sort_index(ascending=False), use_container_width=True)
