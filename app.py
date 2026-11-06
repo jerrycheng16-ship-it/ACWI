@@ -7,20 +7,47 @@ import yfinance as yf
 # 0. 頁面總體配置
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="雙核心 ETF Canary 戰術輪動與對標回測系統",
+    page_title="雙核心 ETF Canary 戰術輪動與動態優化系統",
     layout="wide",
 )
 
 # ---------------------------------------------------------
-# 側邊欄：策略選擇與時間設定
+# 側邊欄：策略選擇與動態參數調整
 # ---------------------------------------------------------
-st.sidebar.title("🎯 策略與參數控制")
+st.sidebar.title("🎯 策略與動態參數尋優")
 strategy_choice = st.sidebar.radio(
     "選擇要運行的戰術策略：",
     [
         "1. ACWI 全球戰術輪動策略 (US-Core & Non-US Canary)",
         "2. VTI 美股加強輪動策略 (SMH Alpha & IWM Canary)",
     ],
+)
+
+st.sidebar.write("---")
+st.sidebar.subheader("⚙️ 量化參數微調 (即時回測)")
+
+ma_window = st.sidebar.slider(
+    "金絲雀 Canary 均線天數 (MA)",
+    min_value=20,
+    max_value=250,
+    value=130,
+    step=10,
+    help="建議改用 130MA (半年線) 以提高敏銳度，減少 lag 損失",
+)
+
+smh_alpha_weight = st.sidebar.slider(
+    "VTI 策略 Risk-On 時 SMH 權重 (%)",
+    min_value=15,
+    max_value=35,
+    value=25,
+    step=5,
+    help="提高科技/半導體龍頭的超額權重以拉高 Alpha",
+) / 100.0
+
+risk_off_mode = st.sidebar.selectbox(
+    "Risk-Off (雙紅燈) 時防禦機制：",
+    ["1. IVV 100% 抱緊美股大盤防禦", "2. 50% IVV + 50% BIL 現金避險"],
+    help="美股具高 ROE 與長牛特性，全撥回 IVV 通常能有效避免在低點拋售避險",
 )
 
 st.sidebar.write("---")
@@ -56,53 +83,37 @@ def get_drawdown_series(cum_returns):
 
 
 # =========================================================
-# 策略一：ACWI 全球戰術輪動策略 (嚴格無前視偏誤版)
+# 策略一：ACWI 全球戰術輪動策略 (動態尋優版)
 # =========================================================
 if "ACWI" in strategy_choice:
-    st.title("🌐 ACWI 全球戰術輪動與基準對標系統")
+    st.title("🌐 ACWI 全球戰術輪動優化系統 (無前視偏誤對齊)")
 
     tickers_acwi = ["IVV", "VGK", "EWJ", "EPP", "IEMG", "BIL"]
     benchmark_weights_acwi = pd.Series(
         [0.63, 0.13, 0.05, 0.09, 0.11, 0.00], index=tickers_acwi
     )
 
-    with st.expander("🏷️ 點此查看：ACWI 策略邏輯與金絲雀機制說明"):
-        st.markdown(
-            """
-        ### 📌 策略核心邏輯 (US-Core & Non-US Canary TAA)
-        以 **IVV** 作為核心，並利用 **IEMG (新興)** 與 **EPP (亞太不含日本)** 作為全球流動性與避險的金絲雀 (Canary) 指標。
-        * **🟢 Risk-On (全球牛市 / 雙綠燈)**：IEMG 與 EPP 收盤價皆高於 200MA。
-          * 配置：`IVV 70%` | `VGK 10%` | `EWJ 5%` | `EPP 5%` | `IEMG 10%` | `BIL 0%`
-        * **🟡 Risk-Neutral (防守切換 / 單綠燈)**：IEMG 與 EPP 僅有 1 支在 200MA 之上。
-          * 配置：`IVV 80%` | `VGK 10%` | `EWJ 10%` | `EPP 0%` | `IEMG 0%` | `BIL 0%`
-        * **🔴 Risk-Off (避險防衛 / 雙紅燈)**：IEMG 與 EPP 皆跌破 200MA。
-          * 配置：`IVV 50%` | `BIL 50%` | 其餘 0%
-        """
-        )
-
-    with st.spinner("正在讀取 ACWI 策略歷史數據並計算無前視偏誤回測..."):
+    with st.spinner("正在讀取數據並執行無前視偏誤回測..."):
         try:
             data = load_etf_data(tickers_acwi, start_date, end_date)
         except Exception as e:
             st.error(f"❌ 數據下載失敗：{e}")
             st.stop()
 
-    if data.empty or len(data) < 200:
-        st.error("❌ 歷史數據不足 200 天，無法執行回測。")
+    if data.empty or len(data) < ma_window:
+        st.error(f"❌ 歷史數據不足 {ma_window} 天，無法執行回測。")
         st.stop()
 
-    ma200 = data.rolling(window=200).mean()
+    ma_target = data.rolling(window=ma_window).mean()
     returns = data.pct_change().fillna(0)
 
-    # 1. 每日計算金絲雀訊號與理論目標權重 (Signal generated at Day T)
-    canary_iemg_series = data["IEMG"] > ma200["IEMG"]
-    canary_epp_series = data["EPP"] > ma200["EPP"]
+    canary_iemg_series = data["IEMG"] > ma_target["IEMG"]
+    canary_epp_series = data["EPP"] > ma_target["EPP"]
 
     df_signals = pd.DataFrame(index=data.index)
     df_signals["Canary_IEMG"] = canary_iemg_series
     df_signals["Canary_EPP"] = canary_epp_series
 
-    # 根據 T 日訊號決定 T 日產生的目標權重
     target_weights = []
     modes = []
     for d in data.index:
@@ -114,7 +125,10 @@ if "ACWI" in strategy_choice:
             w = [0.70, 0.10, 0.05, 0.05, 0.10, 0.00]
         elif not c_iemg and not c_epp:
             mode = "Risk-Off (🔴🔴)"
-            w = [0.50, 0.00, 0.00, 0.00, 0.00, 0.50]
+            if "100%" in risk_off_mode:
+                w = [1.00, 0.00, 0.00, 0.00, 0.00, 0.00]  # IVV 全額大盤防衛
+            else:
+                w = [0.50, 0.00, 0.00, 0.00, 0.00, 0.50]  # 現金避險
         else:
             mode = "Risk-Neutral (🟡)"
             w = [0.80, 0.10, 0.10, 0.00, 0.00, 0.00]
@@ -127,18 +141,17 @@ if "ACWI" in strategy_choice:
     )
     df_signals["Mode"] = modes
 
-    # 2. 核心修正：實施 Lag-1 滯後處理 (Day T 產生的訊號與權重，在 Day T+1 執行套用)
+    # 無前視偏誤核心：Lag-1 Shift
     df_w_executed = df_w_target.shift(1).dropna()
     exec_dates = df_w_executed.index[
-        df_w_executed.index >= data.index[200]
-    ]  # 確保過 200MA
+        df_w_executed.index >= data.index[ma_window]
+    ]
 
-    # 3. 逐日計算執行報酬與 ACWI 基準報酬
     daily_records = []
     for d in exec_dates:
         daily_ret = returns.loc[d]
         strat_w = df_w_executed.loc[d]
-        mode_applied = df_signals.loc[d, "Mode"]  # 當天實際套用的市場模式
+        mode_applied = df_signals.loc[d, "Mode"]
 
         bm_ret = (daily_ret * benchmark_weights_acwi).sum()
         strat_ret = (daily_ret * strat_w).sum()
@@ -190,11 +203,10 @@ if "ACWI" in strategy_choice:
     strat_mdd = strat_dd_series.min()
     bm_mdd = bm_dd_series.min()
 
-    # 4. 月度彙整 (月度顯示的權重與模式，對齊上個月末產生的決定)
     agg_dict = {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
         "BM_Ret": lambda x: (1 + x).prod() - 1,
-        "Mode": "first",  # 當月第一天套用的模式 (即上月底決策)
+        "Mode": "first",
         "Canary_IEMG": "last",
         "Canary_EPP": "last",
         "W_IVV": "first",
@@ -210,7 +222,6 @@ if "ACWI" in strategy_choice:
     monthly_df = df_daily.resample("ME").agg(agg_dict)
     win_rate = (monthly_df["Strat_Ret"] > monthly_df["BM_Ret"]).mean() * 100
 
-    # 5. UI 呈現
     col1, col2, col3 = st.columns(3)
     col1.metric(
         "策略累積總報酬",
@@ -247,53 +258,8 @@ if "ACWI" in strategy_choice:
     )
 
     st.write("---")
-    st.subheader("🔍 金絲雀數據對照：EPP & IEMG 股價 vs 200MA")
-    tab1, tab2 = st.tabs(["EPP (亞太不含日本)", "IEMG (新興市場)"])
-    with tab1:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "EPP 收盤價": data["EPP"].loc[exec_dates],
-                    "EPP 200MA": ma200["EPP"].loc[exec_dates],
-                }
-            )
-        )
-    with tab2:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "IEMG 收盤價": data["IEMG"].loc[exec_dates],
-                    "IEMG 200MA": ma200["IEMG"].loc[exec_dates],
-                }
-            )
-        )
-
-    # 6. 印出當前最新訊號（收盤即時決策）
-    st.subheader("🔔 當前最新金絲雀訊號與推薦配置 (即時最新交易日)")
-    latest_date = data.index[-1]
-    latest_mode = df_signals.loc[latest_date, "Mode"]
-    latest_iemg = (
-        "🟢 均線上"
-        if df_signals.loc[latest_date, "Canary_IEMG"]
-        else "🔴 均線下"
-    )
-    latest_epp = (
-        "🟢 均線上"
-        if df_signals.loc[latest_date, "Canary_EPP"]
-        else "🔴 均線下"
-    )
-    latest_w = df_w_target.loc[latest_date]
-
-    c_rec1, c_rec2, c_rec3 = st.columns(3)
-    c_rec1.info(f"**最新市場狀態**：{latest_mode}")
-    c_rec2.write(f"**IEMG Canary**: {latest_iemg} | **EPP Canary**: {latest_epp}")
-    c_rec3.write(
-        f"**建議持股比例**：IVV {latest_w['IVV']*100:.0f}% | VGK {latest_w['VGK']*100:.0f}% | EWJ {latest_w['EWJ']*100:.0f}% | EPP {latest_w['EPP']*100:.0f}% | IEMG {latest_w['IEMG']*100:.0f}% | BIL {latest_w['BIL']*100:.0f}%"
-    )
-
-    st.write("---")
     st.subheader(
-        "📋 每月詳細策略報酬、對標與各 ETF 獨立月報酬歷程 (無未來偏誤對齊)"
+        "📋 每月詳細策略報酬與對標歷程 (月度第一天執行對齊)"
     )
 
     monthly_display = monthly_df.copy()
@@ -319,22 +285,8 @@ if "ACWI" in strategy_choice:
             "{:.0f}%".format
         )
 
-    monthly_display = monthly_display.rename(
-        columns={
-            "Mode": "當月執行模式",
-            "Canary_IEMG": "IEMG 訊號",
-            "Canary_EPP": "EPP 訊號",
-            "W_IVV": "IVV 權重",
-            "W_VGK": "VGK 權重",
-            "W_EWJ": "EWJ 權重",
-            "W_EPP": "EPP 權重",
-            "W_IEMG": "IEMG 權重",
-            "W_BIL": "BIL 權重",
-        }
-    )
-
     table_cols = [
-        "當月執行模式",
+        "Mode",
         "策略月報酬",
         "ACWI 月報酬",
         "月度勝負",
@@ -344,14 +296,14 @@ if "ACWI" in strategy_choice:
         "EPP 月報酬",
         "IEMG 月報酬",
         "BIL 月報酬",
-        "IEMG 訊號",
-        "EPP 訊號",
-        "IVV 權重",
-        "VGK 權重",
-        "EWJ 權重",
-        "EPP 權重",
-        "IEMG 權重",
-        "BIL 權重",
+        "Canary_IEMG",
+        "Canary_EPP",
+        "W_IVV",
+        "W_VGK",
+        "W_EWJ",
+        "W_EPP",
+        "W_IEMG",
+        "W_BIL",
     ]
     st.dataframe(
         monthly_display[table_cols].sort_index(ascending=False),
@@ -360,44 +312,29 @@ if "ACWI" in strategy_choice:
 
 
 # =========================================================
-# 策略二：VTI 美股加強輪動策略 (嚴格無前視偏誤版)
+# 策略二：VTI 美股加強輪動策略 (動態尋優版)
 # =========================================================
 else:
-    st.title("🚀 VTI 美股核心加強型戰術輪動系統")
+    st.title("🚀 VTI 美股核心加強型優化系統 (無前視偏誤對齊)")
 
     tickers_vti = ["VTI", "IVV", "SMH", "IWM", "BIL"]
 
-    with st.expander("🏷️ 點此查看：VTI 策略邏輯與金絲雀機制說明"):
-        st.markdown(
-            """
-        ### 📌 策略核心邏輯 (US-Large Core + SMH Alpha & IWM Canary)
-        本策略直接對標 **VTI**，以 **IVV** 為穩健底倉，利用 **SMH (半導體)** 為 Alpha 攻擊引擎，**IWM (小型股)** 作為流動性金絲雀預警標的。
-        * **🟢 Risk-On (強勢牛市 / 雙綠燈)**：SMH 與 IWM 均在 200MA 之上。
-          * 配置：`IVV 65%` | `SMH 20% (Alpha加碼)` | `IWM 15%` | `BIL 0%`
-        * **🟡 Risk-Neutral (防守分化 / 單綠燈)**：SMH 與 IWM 僅 1 支在 200MA 之上。
-          * 配置：`IVV 80% (大盤防守)` | 僅持有強勢者 20% | `BIL 0%`
-        * **🔴 Risk-Off (系統熊市 / 雙紅燈)**：SMH 與 IWM 皆跌破 200MA。
-          * 配置：`IVV 50%` | `BIL 50%` | 其餘 0%
-        """
-        )
-
-    with st.spinner("正在讀取 VTI 策略歷史數據並計算無前視偏誤回測..."):
+    with st.spinner("正在讀取數據並執行無前視偏誤回測..."):
         try:
             data = load_etf_data(tickers_vti, start_date, end_date)
         except Exception as e:
             st.error(f"❌ 數據下載失敗：{e}")
             st.stop()
 
-    if data.empty or len(data) < 200:
-        st.error("❌ 歷史數據不足 200 天，無法執行回測。")
+    if data.empty or len(data) < ma_window:
+        st.error(f"❌ 歷史數據不足 {ma_window} 天，無法執行回測。")
         st.stop()
 
-    ma200 = data.rolling(window=200).mean()
+    ma_target = data.rolling(window=ma_window).mean()
     returns = data.pct_change().fillna(0)
 
-    # 1. 每日計算金絲雀訊號與目標權重
-    canary_smh_series = data["SMH"] > ma200["SMH"]
-    canary_iwm_series = data["IWM"] > ma200["IWM"]
+    canary_smh_series = data["SMH"] > ma_target["SMH"]
+    canary_iwm_series = data["IWM"] > ma_target["IWM"]
 
     df_signals = pd.DataFrame(index=data.index)
     df_signals["Canary_SMH"] = canary_smh_series
@@ -411,16 +348,26 @@ else:
 
         if c_smh and c_iwm:
             mode = "Risk-On (🟢🟢)"
-            w = [0.00, 0.65, 0.20, 0.15, 0.00]
+            ivw_w = 1.0 - smh_alpha_weight - 0.15
+            w = [0.00, round(ivw_w, 2), smh_alpha_weight, 0.15, 0.00]
         elif not c_smh and not c_iwm:
             mode = "Risk-Off (🔴🔴)"
-            w = [0.00, 0.50, 0.00, 0.00, 0.50]
+            if "100%" in risk_off_mode:
+                w = [0.00, 1.00, 0.00, 0.00, 0.00]  # IVV 100% 大盤防衛
+            else:
+                w = [0.00, 0.50, 0.00, 0.00, 0.50]  # 現金避險
         else:
             mode = "Risk-Neutral (🟡)"
             if c_smh:
-                w = [0.00, 0.80, 0.20, 0.00, 0.00]
+                w = [
+                    0.00,
+                    round(1.0 - smh_alpha_weight, 2),
+                    smh_alpha_weight,
+                    0.00,
+                    0.00,
+                ]
             else:
-                w = [0.00, 0.80, 0.00, 0.20, 0.00]
+                w = [0.00, 0.85, 0.00, 0.15, 0.00]
 
         modes.append(mode)
         target_weights.append(w)
@@ -430,11 +377,12 @@ else:
     )
     df_signals["Mode"] = modes
 
-    # 2. 核心修正：實施 Lag-1 滯後處理
+    # 無前視偏誤核心：Lag-1 Shift
     df_w_executed = df_w_target.shift(1).dropna()
-    exec_dates = df_w_executed.index[df_w_executed.index >= data.index[200]]
+    exec_dates = df_w_executed.index[
+        df_w_executed.index >= data.index[ma_window]
+    ]
 
-    # 3. 逐日計算
     daily_records = []
     for d in exec_dates:
         daily_ret = returns.loc[d]
@@ -489,7 +437,6 @@ else:
     strat_mdd = strat_dd_series.min()
     vti_mdd = vti_dd_series.min()
 
-    # 4. 月度彙整
     agg_dict = {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
         "VTI_Ret": lambda x: (1 + x).prod() - 1,
@@ -546,53 +493,8 @@ else:
     )
 
     st.write("---")
-    st.subheader("🔍 金絲雀數據驗證：SMH & IWM 股價 vs 200MA")
-    tab1, tab2 = st.tabs(["SMH (半導體 Alpha)", "IWM (小型股金絲雀)"])
-    with tab1:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "SMH 收盤價": data["SMH"].loc[exec_dates],
-                    "SMH 200MA": ma200["SMH"].loc[exec_dates],
-                }
-            )
-        )
-    with tab2:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "IWM 收盤價": data["IWM"].loc[exec_dates],
-                    "IWM 200MA": ma200["IWM"].loc[exec_dates],
-                }
-            )
-        )
-
-    # 6. 即時最新訊號
-    st.subheader("🔔 當前最新金絲雀訊號與推薦配置 (即時最新交易日)")
-    latest_date = data.index[-1]
-    latest_mode = df_signals.loc[latest_date, "Mode"]
-    latest_smh = (
-        "🟢 均線上"
-        if df_signals.loc[latest_date, "Canary_SMH"]
-        else "🔴 均線下"
-    )
-    latest_iwm = (
-        "🟢 均線上"
-        if df_signals.loc[latest_date, "Canary_IWM"]
-        else "🔴 均線下"
-    )
-    latest_w = df_w_target.loc[latest_date]
-
-    c_rec1, c_rec2, c_rec3 = st.columns(3)
-    c_rec1.info(f"**最新市場狀態**：{latest_mode}")
-    c_rec2.write(f"**SMH Canary**: {latest_smh} | **IWM Canary**: {latest_iwm}")
-    c_rec3.write(
-        f"**建議持股比例**：IVV {latest_w['IVV']*100:.0f}% | SMH {latest_w['SMH']*100:.0f}% | IWM {latest_w['IWM']*100:.0f}% | BIL {latest_w['BIL']*100:.0f}%"
-    )
-
-    st.write("---")
     st.subheader(
-        "📋 每月詳細策略報酬、對標與各 ETF 獨立月報酬歷程 (無未來偏誤對齊)"
+        "📋 每月詳細策略報酬與對標歷程 (月度第一天執行對齊)"
     )
 
     monthly_display = monthly_df.copy()
@@ -619,20 +521,8 @@ else:
                 monthly_display[f"W_{t}"] * 100
             ).map("{:.0f}%".format)
 
-    monthly_display = monthly_display.rename(
-        columns={
-            "Mode": "當月執行模式",
-            "Canary_SMH": "SMH 訊號",
-            "Canary_IWM": "IWM 訊號",
-            "W_IVV": "IVV 權重",
-            "W_SMH": "SMH 權重",
-            "W_IWM": "IWM 權重",
-            "W_BIL": "BIL 權重",
-        }
-    )
-
     table_cols = [
-        "當月執行模式",
+        "Mode",
         "策略月報酬",
         "VTI 月報酬",
         "月度勝負",
@@ -640,12 +530,12 @@ else:
         "SMH 月報酬",
         "IWM 月報酬",
         "BIL 月報酬",
-        "SMH 訊號",
-        "IWM 訊號",
-        "IVV 權重",
-        "SMH 權重",
-        "IWM 權重",
-        "BIL 權重",
+        "Canary_SMH",
+        "Canary_IWM",
+        "W_IVV",
+        "W_SMH",
+        "W_IWM",
+        "W_BIL",
     ]
     st.dataframe(
         monthly_display[table_cols].sort_index(ascending=False),
