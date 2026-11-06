@@ -36,12 +36,21 @@ ma_window = st.sidebar.slider(
 )
 
 rel_rsi_oversold = st.sidebar.slider(
-    "VTI 策略：相對 RSI 超跌抄底門檻",
+    "VTI 策略：相對 RSI 超跌抄底門檻 (進場)",
     min_value=20,
     max_value=45,
     value=35,
     step=5,
     help="當 SMH/VTI 或 IWM/VTI 的 RSI 低於此門檻且站在均線上時，觸發逆勢加碼",
+)
+
+rel_rsi_overbought = st.sidebar.slider(
+    "VTI 策略：相對 RSI 獲利了結門檻 (出場)",
+    min_value=50,
+    max_value=85,
+    value=70,
+    step=5,
+    help="當 SMH/VTI 或 IWM/VTI 的 RSI 高於此門檻時，獲利了結切回常態 15% 持股",
 )
 
 smh_add_weight = st.sidebar.slider(
@@ -100,7 +109,7 @@ def get_drawdown_series(cum_returns):
 
 
 # =========================================================
-# 策略一：ACWI 全球戰術輪動策略 (以 EPP 替代 IAPD，無前視偏誤)
+# 策略一：ACWI 全球戰術輪動策略
 # =========================================================
 if "ACWI" in strategy_choice:
     st.title("🌐 ACWI 全球戰術輪動對標系統 (嚴格無前視偏誤對齊)")
@@ -237,7 +246,7 @@ if "ACWI" in strategy_choice:
     strat_mdd = strat_dd_series.min()
     bm_mdd = bm_dd_series.min()
 
-    # 月度彙整 (精準對齊當月第一天實際執行的權重與模式)
+    # 月度彙整
     agg_dict = {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
         "BM_Ret": lambda x: (1 + x).prod() - 1,
@@ -291,52 +300,6 @@ if "ACWI" in strategy_choice:
                 "ACWI 基準 Drawdown (%)": bm_dd_series,
             }
         )
-    )
-
-    st.write("---")
-    st.subheader(
-        f"🔍 金絲雀數據對照：EPP & IEMG 股價 vs {ma_window}MA"
-    )
-    tab1, tab2 = st.tabs(["EPP (亞太不含日本)", "IEMG (新興市場)"])
-    with tab1:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "EPP 收盤價": data["EPP"].loc[exec_dates],
-                    f"EPP {ma_window}MA": ma_target["EPP"].loc[exec_dates],
-                }
-            )
-        )
-    with tab2:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "IEMG 收盤價": data["IEMG"].loc[exec_dates],
-                    f"IEMG {ma_window}MA": ma_target["IEMG"].loc[exec_dates],
-                }
-            )
-        )
-
-    st.subheader("🔔 當前最新金絲雀訊號與推薦配置 (即時最新交易日)")
-    latest_date = data.index[-1]
-    latest_mode = df_signals.loc[latest_date, "Mode"]
-    latest_iemg = (
-        "🟢 均線上"
-        if df_signals.loc[latest_date, "Canary_IEMG"]
-        else "🔴 均線下"
-    )
-    latest_epp = (
-        "🟢 均線上"
-        if df_signals.loc[latest_date, "Canary_EPP"]
-        else "🔴 均線下"
-    )
-    latest_w = df_w_target.loc[latest_date]
-
-    c_rec1, c_rec2, c_rec3 = st.columns(3)
-    c_rec1.info(f"**最新市場狀態**：{latest_mode}")
-    c_rec2.write(f"**IEMG Canary**: {latest_iemg} | **EPP Canary**: {latest_epp}")
-    c_rec3.write(
-        f"**建議持股比例**：IVV {latest_w['IVV']*100:.0f}% | VGK {latest_w['VGK']*100:.0f}% | EWJ {latest_w['EWJ']*100:.0f}% | EPP {latest_w['EPP']*100:.0f}% | IEMG {latest_w['IEMG']*100:.0f}% | BIL {latest_w['BIL']*100:.0f}%"
     )
 
     st.write("---")
@@ -408,22 +371,23 @@ if "ACWI" in strategy_choice:
 
 
 # =========================================================
-# 策略二：VTI 美股相對 RSI 均值回歸策略 (SMH / IWM Ratio RSI)
+# 策略二：VTI 美股相對 RSI 均值回歸策略 (進場 + 出場門檻控制)
 # =========================================================
 else:
     st.title("⚖️ 相對強度 (SMH/VTI & IWM/VTI) RSI 均值回歸戰術系統")
 
     tickers_vti = ["VTI", "IVV", "SMH", "IWM", "BIL"]
 
-    with st.expander("🏷️ 點此查看：相對 RSI (Ratio RSI) 均值回歸邏輯說明"):
+    with st.expander("🏷️ 點此查看：進場/出場雙重門檻控制邏輯說明"):
         st.markdown(
             f"""
-        ### 📌 相對強度 RSI 策略設計原理 (Relative Strength RSI Reversion)
-        本策略監控 **「相對大盤 (VTI) 的比值 RSI」**：
-        * **`SMH / VTI Ratio`**：評估半導體相較於整體美股的超買/超賣強度。
-        * **`IWM / VTI Ratio`**：評估小型股相較於整體美股的強弱輪動。
-        * **常態持股 (無抄底訊號)**：持有 `85% IVV` (高勝率核心) + `15% SMH` (常態動能)。
-        * **抄底機制**：當 `SMH/VTI` 的 RSI < `{rel_rsi_oversold}`，且 SMH 股價在 `{ma_window}MA` 之上時，**將 SMH 加碼至 {int(smh_add_weight*100)}% (IVV 自動降至 {int(round((1-smh_add_weight)*100, 0))}%)**。
+        ### 📌 雙重門檻控制邏輯 (Entry & Exit Rules)
+        * **常態持股 (無加碼訊號)**：持有 `85% IVV` (高勝率核心) + `15% SMH` (常態動能)。
+        * **進場條件 (超跌抄底 Buy-in)**：
+          * 當 `SMH/VTI` RSI < `{rel_rsi_oversold}` 且 SMH > `{ma_window}MA` ➔ **加碼 SMH 至 {int(smh_add_weight*100)}%**。
+          * 當 `IWM/VTI` RSI < `{rel_rsi_oversold}` 且 IWM > `{ma_window}MA` ➔ **加碼 IWM 至 30%**。
+        * **出場/獲利了結條件 (Profit Take Exit)**：
+          * 當相對 RSI > `{rel_rsi_overbought}` (超買高點) 或 股價跌破 `{ma_window}MA` ➔ **全數獲利了結，權重回歸常態 15%**。
         * **無前視偏誤 (No Look-Ahead Bias)**：嚴格實施 **T+1 日滯後執行 (Shift-1)**。
         """
         )
@@ -451,33 +415,41 @@ else:
     ma_filter = data.rolling(window=ma_window).mean()
     returns = data.pct_change().fillna(0)
 
-    # 3. 逐日產生目標權重 (T 日產生的訊號)
+    # 3. 狀態機與離場條件邏輯
     target_weights = []
     modes = []
+    
+    # 追蹤當前持倉狀態 (state)
+    holding_smh_add = False
+    holding_iwm_add = False
 
     for d in data.index:
         smh_above_ma = data.loc[d, "SMH"] > ma_filter.loc[d, "SMH"]
         iwm_above_ma = data.loc[d, "IWM"] > ma_filter.loc[d, "IWM"]
 
-        c_smh_rel_rsi = rel_rsi_smh.loc[d]
-        c_iwm_rel_rsi = rel_rsi_iwm.loc[d]
+        c_smh_rsi = rel_rsi_smh.loc[d]
+        c_iwm_rsi = rel_rsi_iwm.loc[d]
 
-        smh_buy_signal = (c_smh_rel_rsi < rel_rsi_oversold) and smh_above_ma
-        iwm_buy_signal = (c_iwm_rel_rsi < rel_rsi_oversold) and iwm_above_ma
+        # 離場觸發 (高於出場門檻 或 跌破均線)
+        if c_smh_rsi > rel_rsi_overbought or not smh_above_ma:
+            holding_smh_add = False
+        if c_iwm_rsi > rel_rsi_overbought or not iwm_above_ma:
+            holding_iwm_add = False
 
-        if smh_buy_signal and not iwm_buy_signal:
+        # 進場觸發 (低於進場門檻 且 站在均線上)
+        if (c_smh_rsi < rel_rsi_oversold) and smh_above_ma:
+            holding_smh_add = True
+        if (c_iwm_rsi < rel_rsi_oversold) and iwm_above_ma:
+            holding_iwm_add = True
+
+        # 決定當日目標權重
+        if holding_smh_add and not holding_iwm_add:
             mode = f"加碼 SMH (抄底至 {int(smh_add_weight*100)}%)"
-            w = [
-                0.00,
-                round(1.0 - smh_add_weight, 2),
-                smh_add_weight,
-                0.00,
-                0.00,
-            ]
-        elif iwm_buy_signal and not smh_buy_signal:
+            w = [0.00, round(1.0 - smh_add_weight, 2), smh_add_weight, 0.00, 0.00]
+        elif holding_iwm_add and not holding_smh_add:
             mode = "加碼 IWM (逆勢抄底至 30%)"
             w = [0.00, 0.70, 0.00, 0.30, 0.00]
-        elif smh_buy_signal and iwm_buy_signal:
+        elif holding_smh_add and holding_iwm_add:
             mode = "雙資產相對超跌 ➔ 雙重加碼"
             w = [0.00, 0.60, 0.20, 0.20, 0.00]
         else:
@@ -499,8 +471,52 @@ else:
         index=data.index,
     )
 
-    # 4. Lag-1 Shift 消除前視偏誤 (T 日產生的權重與模式，於 T+1 實施套用)
+    # 4. Lag-1 Shift 消除前視偏誤
     df_w_executed = df_w_target.shift(1).dropna()
     df_signals_executed = df_signals.shift(1).dropna()
 
-    exec
+    exec_dates = df_w_executed.index[
+        df_w_executed.index >= data.index[ma_window]
+    ]
+
+    daily_records = []
+    for d in exec_dates:
+        daily_ret = returns.loc[d]
+        strat_w = df_w_executed.loc[d]
+        mode_applied = df_signals_executed.loc[d, "Mode"]
+
+        vti_ret = daily_ret["VTI"]
+        strat_ret = (daily_ret * strat_w).sum()
+
+        rec = {
+            "Date": d,
+            "Mode": mode_applied,
+            "Rel_RSI_SMH": f"{df_signals_executed.loc[d, 'Rel_RSI_SMH']:.1f}",
+            "Rel_RSI_IWM": f"{df_signals_executed.loc[d, 'Rel_RSI_IWM']:.1f}",
+            "Strat_Ret": strat_ret,
+            "VTI_Ret": vti_ret,
+            "W_IVV": strat_w["IVV"],
+            "W_SMH": strat_w["SMH"],
+            "W_IWM": strat_w["IWM"],
+            "W_BIL": strat_w["BIL"],
+        }
+        for t in tickers_vti:
+            rec[f"R_{t}"] = daily_ret[t]
+
+        daily_records.append(rec)
+
+    df_daily = pd.DataFrame(daily_records).set_index("Date")
+
+    strat_cum = (1 + df_daily["Strat_Ret"]).cumprod()
+    vti_cum = (1 + df_daily["VTI_Ret"]).cumprod()
+
+    total_days = (exec_dates[-1] - exec_dates[0]).days
+    years = total_days / 365.25
+
+    strat_total_return = (strat_cum.iloc[-1] - 1) * 100
+    vti_total_return = (vti_cum.iloc[-1] - 1) * 100
+
+    strat_cagr = ((strat_cum.iloc[-1]) ** (1 / years) - 1) * 100
+    vti_cagr = ((vti_cum.iloc[-1]) ** (1 / years) - 1) * 100
+
+    strat_dd_series = get_drawdown_
