@@ -42,7 +42,7 @@ with st.expander("🏷️ 點此查看：策略邏輯與金絲雀（Canary）機
 
 
 # ---------------------------------------------------------
-# 3. 數據下載與安全解析 (快取保護)
+# 3. 數據下載與安全解析
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def load_etf_data(symbols, start, end):
@@ -58,7 +58,7 @@ def load_etf_data(symbols, start, end):
     return df
 
 
-with st.spinner("正在讀取 ETF 歷史股價數據並計算金絲雀訊號..."):
+with st.spinner("正在讀取 ETF 歷史股價數據並計算關鍵指標..."):
     try:
         data = load_etf_data(tickers, start_date, end_date)
     except Exception as e:
@@ -70,7 +70,7 @@ if data.empty or len(data) < 200:
     st.stop()
 
 # ---------------------------------------------------------
-# 4. 逐日與月度戰術回測計算
+# 4. 逐日回測與動態權重計算
 # ---------------------------------------------------------
 ma200 = data.rolling(window=200).mean()
 returns = data.pct_change().fillna(0)
@@ -131,12 +131,29 @@ strat_cum = (1 + df_daily["Strat_Ret"]).cumprod()
 bm_cum = (1 + df_daily["BM_Ret"]).cumprod()
 
 # ---------------------------------------------------------
-# 5. 畫面呈現：頂部 KPI 指標
+# 5. 年化報酬率 (CAGR) 與 Drawdown 走勢計算
 # ---------------------------------------------------------
+total_days = (dates[-1] - dates[0]).days
+years = total_days / 365.25
+
 strat_total_return = (strat_cum.iloc[-1] - 1) * 100
 bm_total_return = (bm_cum.iloc[-1] - 1) * 100
 
-# 月度統計與勝率
+strat_cagr = ((strat_cum.iloc[-1]) ** (1 / years) - 1) * 100
+bm_cagr = ((bm_cum.iloc[-1]) ** (1 / years) - 1) * 100
+
+# 計算逐日 Drawdown 序列
+def get_drawdown_series(cum_returns):
+    peak = cum_returns.cummax()
+    return (cum_returns - peak) / peak * 100
+
+strat_dd_series = get_drawdown_series(strat_cum)
+bm_dd_series = get_drawdown_series(bm_cum)
+
+strat_mdd = strat_dd_series.min()
+bm_mdd = bm_dd_series.min()
+
+# 月度勝率
 monthly_df = df_daily.resample("ME").agg(
     {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
@@ -152,85 +169,38 @@ monthly_df = df_daily.resample("ME").agg(
         "W_BIL": "last",
     }
 )
-
 win_rate = (monthly_df["Strat_Ret"] > monthly_df["BM_Ret"]).mean() * 100
 
+# ---------------------------------------------------------
+# 6. 畫面呈現：KPI 指標與兩張核心圖表
+# ---------------------------------------------------------
 col1, col2, col3 = st.columns(3)
-col1.metric("策略累積總報酬", f"{strat_total_return:.2f}%")
-col2.metric("ACWI 基準總報酬", f"{bm_total_return:.2f}%")
+col1.metric("策略累積總報酬", f"{strat_total_return:.2f}%", f"年化 CAGR: {strat_cagr:.2f}%")
+col2.metric("ACWI 基準總報酬", f"{bm_total_return:.2f}%", f"年化 CAGR: {bm_cagr:.2f}%")
 col3.metric("策略月度超越勝率", f"{win_rate:.2f}%")
 
+st.write("")
+col4, col5 = st.columns(2)
+col4.metric("策略最大回撤 (Max Drawdown)", f"{strat_mdd:.2f}%")
+col5.metric("ACWI 基準最大回撤 (Max Drawdown)", f"{bm_mdd:.2f}%")
+
 st.write("### 📈 累積淨值走勢比較 (基期 = 1.0)")
-df_plot = pd.DataFrame(
+df_cum_plot = pd.DataFrame(
     {"Canary 戰術輪動策略": strat_cum, "ACWI 基準對標": bm_cum}
 )
-st.line_chart(df_plot)
+st.line_chart(df_cum_plot)
+
+st.write("### 📉 風險水庫：水面下回撤走勢圖 (Drawdown %)")
+df_dd_plot = pd.DataFrame(
+    {"Canary 策略 Drawdown (%)": strat_dd_series, "ACWI 基準 Drawdown (%)": bm_dd_series}
+)
+st.line_chart(df_dd_plot)
 
 # ---------------------------------------------------------
-# 6. 最新訊號與詳細計算過程表格 (Monthly Breakdown)
+# 7. 最新訊號與詳細表格
 # ---------------------------------------------------------
 st.write("---")
 st.subheader("🔔 當前最新金絲雀訊號與推薦配置")
 latest_rec = df_daily.iloc[-1]
 
-c_rec1, c_rec2, c_rec3 = st.columns(3)
-c_rec1.info(f"**最新市場狀態**：{latest_rec['Mode']}")
-c_rec2.write(
-    f"**IEMG Canary**: {latest_rec['Canary_IEMG']} | **IAPD Canary**: {latest_rec['Canary_IAPD']}"
-)
-c_rec3.write(
-    f"**建議持股比例**：IVV {latest_rec['W_IVV']*100:.0f}% | VGK {latest_rec['W_VGK']*100:.0f}% | EWJ {latest_rec['W_EWJ']*100:.0f}% | IAPD {latest_rec['W_IAPD']*100:.0f}% | IEMG {latest_rec['W_IEMG']*100:.0f}% | BIL {latest_rec['W_BIL']*100:.0f}%"
-)
-
-st.write("---")
-st.subheader("📋 每月詳細策略報酬與配置歷程 (Monthly History Breakdown)")
-
-# Formatting 月度表格
-monthly_display = monthly_df.copy()
-monthly_display["策略月報酬"] = (
-    monthly_display["Strat_Ret"] * 100
-).map("{:.2f}%".format)
-monthly_display["ACWI 月報酬"] = (
-    monthly_display["BM_Ret"] * 100
-).map("{:.2f}%".format)
-monthly_display["月度勝負"] = np.where(
-    monthly_display["Strat_Ret"] > monthly_display["BM_Ret"],
-    "🏆 擊敗 ACWI",
-    "🔻 落後 ACWI",
-)
-
-# 格式化權重顯示
-for col in ["W_IVV", "W_VGK", "W_EWJ", "W_IAPD", "W_IEMG", "W_BIL"]:
-    monthly_display[col] = (monthly_display[col] * 100).map("{:.0f}%".format)
-
-monthly_display = monthly_display.rename(
-    columns={
-        "Mode": "市場狀態",
-        "Canary_IEMG": "IEMG 訊號",
-        "Canary_IAPD": "IAPD 訊號",
-        "W_IVV": "IVV 權重",
-        "W_VGK": "VGK 權重",
-        "W_EWJ": "EWJ 權重",
-        "W_IAPD": "IAPD 權重",
-        "W_IEMG": "IEMG 權重",
-        "W_BIL": "BIL 權重",
-    }
-)
-
-table_columns = [
-    "市場狀態",
-    "策略月報酬",
-    "ACWI 月報酬",
-    "月度勝負",
-    "IEMG 訊號",
-    "IAPD 訊號",
-    "IVV 權重",
-    "VGK 權重",
-    "EWJ 權重",
-    "IAPD 權重",
-    "IEMG 權重",
-    "BIL 權重",
-]
-
-# 最新月份擺在最上方方便檢視
-st.dataframe(monthly_display[table_columns].sort_index(ascending=False), use_container_width=True)
+c_rec1, c_rec2, c_rec3 = st.columns(
