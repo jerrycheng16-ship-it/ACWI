@@ -7,7 +7,7 @@ import yfinance as yf
 # 0. 頁面總體配置
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="雙核心 ETF Canary 戰術輪動與對標回測系統",
+    page_title="雙核心 ETF Canary & RSI 戰術輪動系統",
     layout="wide",
 )
 
@@ -18,7 +18,7 @@ st.sidebar.title("🎯 策略與動態參數尋優")
 strategy_choice = st.sidebar.radio(
     "選擇要運行的戰術策略：",
     [
-        "1. ACWI 全球戰術輪動策略 (US-Core & Non-US Canary)",
+        "1. ACWI 全球戰術輪動策略 (IEMG/EPP 比值 RSI)",
         "2. VTI 美股相對 RSI 均值回歸策略 (SMH / IWM Ratio RSI)",
     ],
 )
@@ -27,7 +27,7 @@ st.sidebar.write("---")
 st.sidebar.subheader("⚙️ 量化參數微調 (即時回測)")
 
 ma_window = st.sidebar.slider(
-    "金絲雀 Canary / 均線過濾天數 (MA)",
+    "均線過濾天數 (MA Filter)",
     min_value=20,
     max_value=250,
     value=130,
@@ -36,21 +36,21 @@ ma_window = st.sidebar.slider(
 )
 
 rel_rsi_oversold = st.sidebar.slider(
-    "VTI 策略：相對 RSI 超跌抄底門檻 (進場)",
+    "相對 RSI 超跌抄底門檻 (進場)",
     min_value=20,
     max_value=45,
     value=35,
     step=5,
-    help="當 SMH/VTI 或 IWM/VTI 的 RSI 低於此門檻且站在均線上時，觸發逆勢加碼",
+    help="當相對 RSI 低於此門檻且站在均線上時，觸發逆勢加碼",
 )
 
 rel_rsi_overbought = st.sidebar.slider(
-    "VTI 策略：相對 RSI 獲利了結門檻 (出場)",
+    "相對 RSI 獲利了結門檻 (出場)",
     min_value=50,
     max_value=85,
     value=70,
     step=5,
-    help="當 SMH/VTI 或 IWM/VTI 的 RSI 高於此門檻時，獲利了結切回常態 15% 持股",
+    help="當相對 RSI 高於此門檻時，獲利了結切回常態/大盤防守持股",
 )
 
 smh_add_weight = (
@@ -66,7 +66,7 @@ smh_add_weight = (
 )
 
 risk_off_mode_acwi = st.sidebar.selectbox(
-    "ACWI 策略：Risk-Off (雙紅燈) 防禦機制：",
+    "ACWI 策略：Risk-Off 防禦機制：",
     ["1. IVV 100% 抱緊美股大盤防衛", "2. 50% IVV + 50% BIL 現金避險"],
     help="美股具高 ROE 與長牛特性，全撥回 IVV 通常能有效避開低點拋售避險造成的傷害",
 )
@@ -112,31 +112,29 @@ def get_drawdown_series(cum_returns):
 
 
 # =========================================================
-# 策略一：ACWI 全球戰術輪動策略
+# 策略一：ACWI 全球戰術輪動策略 (相對 RSI 門檻控制版)
 # =========================================================
 if "ACWI" in strategy_choice:
-    st.title("🌐 ACWI 全球戰術輪動對標系統 (嚴格無前視偏誤對齊)")
+    st.title("🌐 ACWI 全球戰術輪動系統 (IEMG/IVV & EPP/IVV 比值 RSI)")
 
     tickers_acwi = ["IVV", "VGK", "EWJ", "EPP", "IEMG", "BIL"]
     benchmark_weights_acwi = pd.Series(
         [0.63, 0.13, 0.05, 0.09, 0.11, 0.00], index=tickers_acwi
     )
 
-    with st.expander("🏷️ 點此查看：ACWI 策略邏輯與金絲雀機制說明"):
+    with st.expander("🏷️ 點此查看：ACWI 相對 RSI 雙門檻戰術邏輯說明"):
         st.markdown(
-            """
-        ### 📌 策略核心邏輯 (US-Core & Non-US Canary TAA)
-        以 **IVV** 作為核心，並利用 **IEMG (新興)** 與 **EPP (亞太不含日本)** 作為全球流動性與避險的金絲雀 (Canary) 指標。
-        * **🟢 Risk-On (全球牛市 / 雙綠燈)**：IEMG 與 EPP 收盤價皆高於 均線 (MA)。
-          * 配置：`IVV 70%` | `VGK 10%` | `EWJ 5%` | `EPP 5%` | `IEMG 10%` | `BIL 0%`
-        * **🟡 Risk-Neutral (防守切換 / 單綠燈)**：IEMG 與 EPP 僅有 1 支在 均線 之上。
-          * 配置：`IVV 80%` | `VGK 10%` | `EWJ 10%` | `EPP 0%` | `IEMG 0%` | `BIL 0%`
-        * **🔴 Risk-Off (避險防衛 / 雙紅燈)**：IEMG 與 EPP 皆跌破 均線。
-          * 配置 (根據側邊欄)：`IVV 100% (大盤防衛)` 或 `IVV 50% + BIL 50% (現金避險)`
+            f"""
+        ### 📌 ACWI 相對 RSI 策略原理 (Relative RSI Entry/Exit)
+        本策略監控 **`IEMG / IVV` (新興市場比美股)** 與 **`EPP / IVV` (亞太比美股)** 的 14 日相對 RSI：
+        * **進場加碼 (Entry)**：當相對 RSI < `{rel_rsi_oversold}` 且股價 > `{ma_window}MA` 時，觸發非美市場進場加碼。
+        * **離場獲利了結 (Exit)**：當相對 RSI > `{rel_rsi_overbought}` (相對超買高點) 或 股價跌破 `{ma_window}MA` 時，全數獲利了結。
+        * **無訊號常態**：撥回 `100% IVV (美股大盤防禦)` 或 `50% IVV + 50% BIL (現金避險)` (視側邊欄選項而定)。
+        * **無前視偏誤 (No Look-Ahead Bias)**：嚴格實施 **T+1 日滯後執行 (Shift-1)**。
         """
         )
 
-    with st.spinner("正在讀取數據並執行無前視偏誤回測..."):
+    with st.spinner("正在讀取歷史數據並計算 IEMG/IVV 與 EPP/IVV 相對 RSI..."):
         try:
             data = load_etf_data(tickers_acwi, start_date, end_date)
         except Exception as e:
@@ -147,35 +145,58 @@ if "ACWI" in strategy_choice:
         st.error(f"❌ 歷史數據不足 {ma_window} 天，無法執行回測。")
         st.stop()
 
-    ma_target = data.rolling(window=ma_window).mean()
+    # 1. 計算相對比值 (Ratio) 與 14 日 Relative RSI
+    ratio_iemg_ivv = data["IEMG"] / data["IVV"]
+    ratio_epp_ivv = data["EPP"] / data["IVV"]
+
+    rel_rsi_iemg = calculate_rsi(ratio_iemg_ivv, period=14)
+    rel_rsi_epp = calculate_rsi(ratio_epp_ivv, period=14)
+
+    ma_filter = data.rolling(window=ma_window).mean()
     returns = data.pct_change().fillna(0)
 
-    # 1. T 日計算金絲雀訊號與目標權重
-    canary_iemg_series = data["IEMG"] > ma_target["IEMG"]
-    canary_epp_series = data["EPP"] > ma_target["EPP"]
-
-    df_signals = pd.DataFrame(index=data.index)
-    df_signals["Canary_IEMG"] = canary_iemg_series
-    df_signals["Canary_EPP"] = canary_epp_series
-
+    # 2. 狀態機控制進出場
     target_weights = []
     modes = []
-    for d in data.index:
-        c_iemg = df_signals.loc[d, "Canary_IEMG"]
-        c_epp = df_signals.loc[d, "Canary_EPP"]
 
-        if c_iemg and c_epp:
-            mode = "Risk-On (🟢🟢)"
-            w = [0.70, 0.10, 0.05, 0.05, 0.10, 0.00]
-        elif not c_iemg and not c_epp:
-            mode = "Risk-Off (🔴🔴)"
+    holding_iemg_add = False
+    holding_epp_add = False
+
+    for d in data.index:
+        iemg_above_ma = data.loc[d, "IEMG"] > ma_filter.loc[d, "IEMG"]
+        epp_above_ma = data.loc[d, "EPP"] > ma_filter.loc[d, "EPP"]
+
+        c_iemg_rsi = rel_rsi_iemg.loc[d]
+        c_epp_rsi = rel_rsi_epp.loc[d]
+
+        # 離場判斷
+        if c_iemg_rsi > rel_rsi_overbought or not iemg_above_ma:
+            holding_iemg_add = False
+        if c_epp_rsi > rel_rsi_overbought or not epp_above_ma:
+            holding_epp_add = False
+
+        # 進場判斷
+        if (c_iemg_rsi < rel_rsi_oversold) and iemg_above_ma:
+            holding_iemg_add = True
+        if (c_epp_rsi < rel_rsi_oversold) and epp_above_ma:
+            holding_epp_add = True
+
+        # 權重分配
+        if holding_iemg_add and holding_epp_add:
+            mode = "全球牛市 (🟢🟢 雙重加碼)"
+            w = [0.60, 0.10, 0.05, 0.10, 0.15, 0.00]
+        elif holding_iemg_add and not holding_epp_add:
+            mode = "加碼 IEMG (新興市場超跌)"
+            w = [0.70, 0.10, 0.05, 0.00, 0.15, 0.00]
+        elif holding_epp_add and not holding_iemg_add:
+            mode = "加碼 EPP (亞太市場超跌)"
+            w = [0.70, 0.10, 0.05, 0.15, 0.00, 0.00]
+        else:
+            mode = "大盤常態防禦 (🔴🔴)"
             if "100%" in risk_off_mode_acwi:
                 w = [1.00, 0.00, 0.00, 0.00, 0.00, 0.00]
             else:
                 w = [0.50, 0.00, 0.00, 0.00, 0.00, 0.50]
-        else:
-            mode = "Risk-Neutral (🟡)"
-            w = [0.80, 0.10, 0.10, 0.00, 0.00, 0.00]
 
         modes.append(mode)
         target_weights.append(w)
@@ -183,9 +204,16 @@ if "ACWI" in strategy_choice:
     df_w_target = pd.DataFrame(
         target_weights, index=data.index, columns=tickers_acwi
     )
-    df_signals["Mode"] = modes
+    df_signals = pd.DataFrame(
+        {
+            "Mode": modes,
+            "Rel_RSI_IEMG": rel_rsi_iemg,
+            "Rel_RSI_EPP": rel_rsi_epp,
+        },
+        index=data.index,
+    )
 
-    # 2. 嚴格實施 Lag-1 滯後處理 (Shift-1) 消除前視偏誤
+    # 3. Lag-1 Shift 消除前視偏誤
     df_w_executed = df_w_target.shift(1).dropna()
     df_signals_executed = df_signals.shift(1).dropna()
 
@@ -205,16 +233,8 @@ if "ACWI" in strategy_choice:
         rec = {
             "Date": d,
             "Mode": mode_applied,
-            "Canary_IEMG": (
-                "🟢 均線上"
-                if df_signals_executed.loc[d, "Canary_IEMG"]
-                else "🔴 均線下"
-            ),
-            "Canary_EPP": (
-                "🟢 均線上"
-                if df_signals_executed.loc[d, "Canary_EPP"]
-                else "🔴 均線下"
-            ),
+            "Rel_RSI_IEMG": f"{df_signals_executed.loc[d, 'Rel_RSI_IEMG']:.1f}",
+            "Rel_RSI_EPP": f"{df_signals_executed.loc[d, 'Rel_RSI_EPP']:.1f}",
             "Strat_Ret": strat_ret,
             "BM_Ret": bm_ret,
             "W_IVV": strat_w["IVV"],
@@ -249,13 +269,11 @@ if "ACWI" in strategy_choice:
     strat_mdd = strat_dd_series.min()
     bm_mdd = bm_dd_series.min()
 
-    # 月度彙整
+    # 月度統計 (統一用 first 對齊當月首個交易日)
     agg_dict = {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
         "BM_Ret": lambda x: (1 + x).prod() - 1,
         "Mode": "first",
-        "Canary_IEMG": "first",
-        "Canary_EPP": "first",
         "W_IVV": "first",
         "W_VGK": "first",
         "W_EWJ": "first",
@@ -272,7 +290,7 @@ if "ACWI" in strategy_choice:
     # 畫面呈現
     col1, col2, col3 = st.columns(3)
     col1.metric(
-        "策略累積總報酬",
+        "ACWI RSI 策略總報酬",
         f"{strat_total_return:.2f}%",
         f"年化 CAGR: {strat_cagr:.2f}%",
     )
@@ -291,7 +309,7 @@ if "ACWI" in strategy_choice:
     st.write("### 📈 累積淨值走勢比較 (基期 = 1.0)")
     st.line_chart(
         pd.DataFrame(
-            {"Canary 戰術輪動策略": strat_cum, "ACWI 基準對標": bm_cum}
+            {"ACWI Ratio RSI 策略": strat_cum, "ACWI 基準對標": bm_cum}
         )
     )
 
@@ -299,7 +317,7 @@ if "ACWI" in strategy_choice:
     st.line_chart(
         pd.DataFrame(
             {
-                "Canary 策略 Drawdown (%)": strat_dd_series,
+                "RSI 策略 Drawdown (%)": strat_dd_series,
                 "ACWI 基準 Drawdown (%)": bm_dd_series,
             }
         )
@@ -307,31 +325,54 @@ if "ACWI" in strategy_choice:
 
     # ACWI 最新訊號卡片
     st.write("---")
-    st.subheader("🔔 當前 11 月最新金絲雀訊號與推薦配置 (即時最新交易日)")
-    latest_date = data.index[-1]
-    latest_mode = df_signals.loc[latest_date, "Mode"]
-    latest_iemg = (
-        "🟢 均線上"
-        if df_signals.loc[latest_date, "Canary_IEMG"]
-        else "🔴 均線下"
-    )
-    latest_epp = (
-        "🟢 均線上"
-        if df_signals.loc[latest_date, "Canary_EPP"]
-        else "🔴 均線下"
-    )
-    latest_w = df_w_target.loc[latest_date]
+    st.subheader("🔔 當前 11 月最新交易訊號與建倉推薦配置 (即時盤後)")
+    latest_date_acwi = data.index[-1]
+    latest_mode_acwi = df_signals.loc[latest_date_acwi, "Mode"]
+    latest_rsi_iemg_val = rel_rsi_iemg.loc[latest_date_acwi]
+    latest_rsi_epp_val = rel_rsi_epp.loc[latest_date_acwi]
+    latest_w_acwi = df_w_target.loc[latest_date_acwi]
 
-    c_rec1, c_rec2, c_rec3 = st.columns(3)
-    c_rec1.info(
-        f"**最新交易日**: {latest_date.strftime('%Y-%m-%d')}\n\n**當前市場模式**: {latest_mode}"
+    a_rec1, a_rec2, a_rec3 = st.columns(3)
+    a_rec1.info(
+        f"**最新交易日**: {latest_date_acwi.strftime('%Y-%m-%d')}\n\n**當前市場模式**: {latest_mode_acwi}"
     )
-    c_rec2.warning(
-        f"**IEMG Canary**: {latest_iemg}\n\n**EPP Canary**: {latest_epp}"
+    a_rec2.warning(
+        f"**IEMG/IVV 相對 RSI**: {latest_rsi_iemg_val:.1f}\n\n**EPP/IVV 相對 RSI**: {latest_rsi_epp_val:.1f}"
     )
-    c_rec3.success(
-        f"**建議 11 月配置**:\n\nIVV: {latest_w['IVV']*100:.0f}% | VGK: {latest_w['VGK']*100:.0f}% | EWJ: {latest_w['EWJ']*100:.0f}%\n\nEPP: {latest_w['EPP']*100:.0f}% | IEMG: {latest_w['IEMG']*100:.0f}% | BIL: {latest_w['BIL']*100:.0f}%"
+    a_rec3.success(
+        f"**建議 11 月配置比例**:\n\nIVV: {latest_w_acwi['IVV']*100:.0f}% | VGK: {latest_w_acwi['VGK']*100:.0f}% | EWJ: {latest_w_acwi['EWJ']*100:.0f}%\n\nEPP: {latest_w_acwi['EPP']*100:.0f}% | IEMG: {latest_w_acwi['IEMG']*100:.0f}% | BIL: {latest_w_acwi['BIL']*100:.0f}%"
     )
+
+    # 相對 RSI 圖表
+    st.write("---")
+    st.subheader(
+        "📊 相對強度 RSI (Ratio RSI) 歷史對照圖與進/出場門檻"
+    )
+    tab_acwi1, tab_acwi2 = st.tabs(
+        ["IEMG / IVV 相對 RSI", "EPP / IVV 相對 RSI"]
+    )
+
+    with tab_acwi1:
+        st.line_chart(
+            pd.DataFrame(
+                {
+                    "IEMG/IVV 相對 14日 RSI": rel_rsi_iemg.loc[exec_dates],
+                    "超跌抄底進場門檻": rel_rsi_oversold,
+                    "超買獲利了結門檻": rel_rsi_overbought,
+                }
+            )
+        )
+
+    with tab_acwi2:
+        st.line_chart(
+            pd.DataFrame(
+                {
+                    "EPP/IVV 相對 14日 RSI": rel_rsi_epp.loc[exec_dates],
+                    "超跌抄底進場門檻": rel_rsi_oversold,
+                    "超買獲利了結門檻": rel_rsi_overbought,
+                }
+            )
+        )
 
     st.write("---")
     st.subheader(
@@ -364,8 +405,6 @@ if "ACWI" in strategy_choice:
     monthly_display = monthly_display.rename(
         columns={
             "Mode": "當月執行模式",
-            "Canary_IEMG": "IEMG 訊號",
-            "Canary_EPP": "EPP 訊號",
             "W_IVV": "IVV 權重",
             "W_VGK": "VGK 權重",
             "W_EWJ": "EWJ 權重",
@@ -386,8 +425,6 @@ if "ACWI" in strategy_choice:
         "EPP 月報酬",
         "IEMG 月報酬",
         "BIL 月報酬",
-        "IEMG 訊號",
-        "EPP 訊號",
         "IVV 權重",
         "VGK 權重",
         "EWJ 權重",
@@ -575,152 +612,4 @@ else:
         agg_dict[f"R_{t}"] = lambda x, symbol=t: (1 + x).prod() - 1
 
     monthly_df = df_daily.resample("ME").agg(agg_dict)
-    win_rate = (monthly_df["Strat_Ret"] > monthly_df["VTI_Ret"]).mean() * 100
-
-    # 5. 畫面呈現
-    col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "相對 RSI 策略總報酬",
-        f"{strat_total_return:.2f}%",
-        f"年化 CAGR: {strat_cagr:.2f}%",
-    )
-    col2.metric(
-        "VTI 買入持有總報酬",
-        f"{vti_total_return:.2f}%",
-        f"年化 CAGR: {vti_cagr:.2f}%",
-    )
-    col3.metric("月度超越 VTI 勝率", f"{win_rate:.2f}%")
-
-    st.write("")
-    col4, col5 = st.columns(2)
-    col4.metric("策略最大回撤 (Max Drawdown)", f"{strat_mdd:.2f}%")
-    col5.metric("VTI 基準最大回撤 (Max Drawdown)", f"{vti_mdd:.2f}%")
-
-    st.write("### 📈 累積淨值走勢比較 (基期 = 1.0)")
-    st.line_chart(
-        pd.DataFrame(
-            {
-                "相對 RSI 均值回歸策略": strat_cum,
-                "VTI Buy & Hold 基準": vti_cum,
-            }
-        )
-    )
-
-    st.write("### 📉 風險水庫：水面下回撤走勢圖 (Drawdown %)")
-    st.line_chart(
-        pd.DataFrame(
-            {
-                "策略 Drawdown (%)": strat_dd_series,
-                "VTI 基準 Drawdown (%)": vti_dd_series,
-            }
-        )
-    )
-
-    # ---------------------------------------------------------
-    # 🆕 VTI 策略專屬：當前 11 月最新即時訊號與推薦配置卡片
-    # ---------------------------------------------------------
-    st.write("---")
-    st.subheader("🔔 當前 11 月最新交易訊號與建倉推薦配置 (即時盤後)")
-    latest_date_vti = data.index[-1]
-    latest_mode_vti = df_signals.loc[latest_date_vti, "Mode"]
-    latest_rsi_smh_val = rel_rsi_smh.loc[latest_date_vti]
-    latest_rsi_iwm_val = rel_rsi_iwm.loc[latest_date_vti]
-    latest_w_vti = df_w_target.loc[latest_date_vti]
-
-    v_rec1, v_rec2, v_rec3 = st.columns(3)
-    v_rec1.info(
-        f"**最新交易日**: {latest_date_vti.strftime('%Y-%m-%d')}\n\n**當前市場模式**: {latest_mode_vti}"
-    )
-    v_rec2.warning(
-        f"**SMH/VTI 相對 RSI**: {latest_rsi_smh_val:.1f}\n\n**IWM/VTI 相對 RSI**: {latest_rsi_iwm_val:.1f}"
-    )
-    v_rec3.success(
-        f"**建議 11 月配置比例**:\n\nIVV: {latest_w_vti['IVV']*100:.0f}% | SMH: {latest_w_vti['SMH']*100:.0f}%\n\nIWM: {latest_w_vti['IWM']*100:.0f}% | BIL: {latest_w_vti['BIL']*100:.0f}%"
-    )
-
-    # 6. 相對 RSI 圖表 (含進場/出場參考雙門檻)
-    st.write("---")
-    st.subheader(
-        "📊 相對強度 RSI (Ratio RSI) 歷史對照圖與進/出場門檻"
-    )
-    tab_rel1, tab_rel2 = st.tabs(["SMH / VTI 相對 RSI", "IWM / VTI 相對 RSI"])
-
-    with tab_rel1:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "SMH/VTI 相對 14日 RSI": rel_rsi_smh.loc[exec_dates],
-                    "超跌抄底進場門檻": rel_rsi_oversold,
-                    "超買獲利了結門檻": rel_rsi_overbought,
-                }
-            )
-        )
-
-    with tab_rel2:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "IWM/VTI 相對 14日 RSI": rel_rsi_iwm.loc[exec_dates],
-                    "超跌抄底進場門檻": rel_rsi_oversold,
-                    "超買獲利了結門檻": rel_rsi_overbought,
-                }
-            )
-        )
-
-    st.write("---")
-    st.subheader(
-        "📋 每月詳細策略報酬與各 ETF 獨立月報酬歷程 (T+1 執行對齊)"
-    )
-
-    monthly_display = monthly_df.copy()
-    monthly_display.index = monthly_display.index.strftime("%Y-%m-%d")
-
-    monthly_display["策略月報酬"] = (
-        monthly_display["Strat_Ret"] * 100
-    ).map("{:.2f}%".format)
-    monthly_display["VTI 月報酬"] = (
-        monthly_display["VTI_Ret"] * 100
-    ).map("{:.2f}%".format)
-    monthly_display["月度勝負"] = np.where(
-        monthly_display["Strat_Ret"] > monthly_display["VTI_Ret"],
-        "🏆 擊敗 VTI",
-        "🔻 落後 VTI",
-    )
-
-    for t in tickers_vti:
-        monthly_display[f"{t} 月報酬"] = (
-            monthly_display[f"R_{t}"] * 100
-        ).map("{:.2f}%".format)
-        if t != "VTI":
-            monthly_display[f"W_{t}"] = (
-                monthly_display[f"W_{t}"] * 100
-            ).map("{:.0f}%".format)
-
-    monthly_display = monthly_display.rename(
-        columns={
-            "Mode": "當月執行模式",
-            "W_IVV": "IVV 權重",
-            "W_SMH": "SMH 權重",
-            "W_IWM": "IWM 權重",
-            "W_BIL": "BIL 權重",
-        }
-    )
-
-    table_cols = [
-        "當月執行模式",
-        "策略月報酬",
-        "VTI 月報酬",
-        "月度勝負",
-        "IVV 月報酬",
-        "SMH 月報酬",
-        "IWM 月報酬",
-        "BIL 月報酬",
-        "IVV 權重",
-        "SMH 權重",
-        "IWM 權重",
-        "BIL 權重",
-    ]
-    st.dataframe(
-        monthly_display[table_cols].sort_index(ascending=False),
-        use_container_width=True,
-    )
+    win_rate = (monthly_df["Strat_Ret"] > monthly_df["VTI
