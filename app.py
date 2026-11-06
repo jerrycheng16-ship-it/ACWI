@@ -614,4 +614,40 @@ else:
         monthly_display[f"{t} 月報酬"] = (
             monthly_display[f"R_{t}"] * 100
         ).map("{:.2f}%".format)
-        if
+        if t != "VTI":
+            monthly_display[f"W_{t}"] = (
+                monthly_display[f"W_{t}"] * 100
+            ).map("{:.0f}%".format)
+
+    monthly_display = monthly_display.rename(
+        columns={
+            "Mode": "當月執行模式",
+            "Canary_SMH": "SMH 訊號",
+            "Canary_IWM": "IWM 訊號",
+            "W_IVV": "IVV 權重",
+            "W_SMH": "SMH 權重",
+            "W_IWM": "IWM 權重",
+            "W_BIL": "BIL 權重",
+        }
+    )
+
+    table_cols = [
+        "當月執行模式",
+        "策略月報酬",
+        "VTI 月報酬",
+        "月度勝負",
+        "IVV 月報酬",
+        "SMH 月報酬",
+        "IWM 月報酬",
+        "BIL 月報酬",
+        "SMH 訊號",
+        "IWM 訊號",
+        "IVV 權重",
+        "SMH 權重",
+        "IWM 權重",
+        "BIL 權重",
+    ]
+    st.dataframe(
+        monthly_display[table_cols].sort_index(ascending=False),
+        use_container_width=True,
+    )
