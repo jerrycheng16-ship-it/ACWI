@@ -175,6 +175,8 @@ if "ACWI" in strategy_choice:
 
     # 2. 嚴格實施 Lag-1 滯後處理 (Shift-1) 消除前視偏誤
     df_w_executed = df_w_target.shift(1).dropna()
+    df_signals_executed = df_signals.shift(1).dropna()
+
     exec_dates = df_w_executed.index[
         df_w_executed.index >= data.index[ma_window]
     ]
@@ -183,7 +185,7 @@ if "ACWI" in strategy_choice:
     for d in exec_dates:
         daily_ret = returns.loc[d]
         strat_w = df_w_executed.loc[d]
-        mode_applied = df_signals.shift(1).loc[d, "Mode"]
+        mode_applied = df_signals_executed.loc[d, "Mode"]
 
         bm_ret = (daily_ret * benchmark_weights_acwi).sum()
         strat_ret = (daily_ret * strat_w).sum()
@@ -193,12 +195,12 @@ if "ACWI" in strategy_choice:
             "Mode": mode_applied,
             "Canary_IEMG": (
                 "🟢 均線上"
-                if df_signals.shift(1).loc[d, "Canary_IEMG"]
+                if df_signals_executed.loc[d, "Canary_IEMG"]
                 else "🔴 均線下"
             ),
             "Canary_EPP": (
                 "🟢 均線上"
-                if df_signals.shift(1).loc[d, "Canary_EPP"]
+                if df_signals_executed.loc[d, "Canary_EPP"]
                 else "🔴 均線下"
             ),
             "Strat_Ret": strat_ret,
@@ -235,7 +237,7 @@ if "ACWI" in strategy_choice:
     strat_mdd = strat_dd_series.min()
     bm_mdd = bm_dd_series.min()
 
-    # 月度彙整 (精準對齊當月第一天實際執行的模式與權重)
+    # 月度彙整 (精準對齊當月第一天實際執行的權重與模式)
     agg_dict = {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
         "BM_Ret": lambda x: (1 + x).prod() - 1,
@@ -501,192 +503,4 @@ else:
     df_w_executed = df_w_target.shift(1).dropna()
     df_signals_executed = df_signals.shift(1).dropna()
 
-    exec_dates = df_w_executed.index[
-        df_w_executed.index >= data.index[ma_window]
-    ]
-
-    daily_records = []
-    for d in exec_dates:
-        daily_ret = returns.loc[d]
-        strat_w = df_w_executed.loc[d]
-        mode_applied = df_signals_executed.loc[d, "Mode"]
-
-        vti_ret = daily_ret["VTI"]
-        strat_ret = (daily_ret * strat_w).sum()
-
-        rec = {
-            "Date": d,
-            "Mode": mode_applied,
-            "Rel_RSI_SMH": f"{df_signals_executed.loc[d, 'Rel_RSI_SMH']:.1f}",
-            "Rel_RSI_IWM": f"{df_signals_executed.loc[d, 'Rel_RSI_IWM']:.1f}",
-            "Strat_Ret": strat_ret,
-            "VTI_Ret": vti_ret,
-            "W_IVV": strat_w["IVV"],
-            "W_SMH": strat_w["SMH"],
-            "W_IWM": strat_w["IWM"],
-            "W_BIL": strat_w["BIL"],
-        }
-        for t in tickers_vti:
-            rec[f"R_{t}"] = daily_ret[t]
-
-        daily_records.append(rec)
-
-    df_daily = pd.DataFrame(daily_records).set_index("Date")
-
-    strat_cum = (1 + df_daily["Strat_Ret"]).cumprod()
-    vti_cum = (1 + df_daily["VTI_Ret"]).cumprod()
-
-    total_days = (exec_dates[-1] - exec_dates[0]).days
-    years = total_days / 365.25
-
-    strat_total_return = (strat_cum.iloc[-1] - 1) * 100
-    vti_total_return = (vti_cum.iloc[-1] - 1) * 100
-
-    strat_cagr = ((strat_cum.iloc[-1]) ** (1 / years) - 1) * 100
-    vti_cagr = ((vti_cum.iloc[-1]) ** (1 / years) - 1) * 100
-
-    strat_dd_series = get_drawdown_series(strat_cum)
-    vti_dd_series = get_drawdown_series(vti_cum)
-
-    strat_mdd = strat_dd_series.min()
-    vti_mdd = vti_dd_series.min()
-
-    # 月度統計 (統一使用 first 對齊當月第一天實際執行的權重與模式)
-    agg_dict = {
-        "Strat_Ret": lambda x: (1 + x).prod() - 1,
-        "VTI_Ret": lambda x: (1 + x).prod() - 1,
-        "Mode": "first",
-        "W_IVV": "first",
-        "W_SMH": "first",
-        "W_IWM": "first",
-        "W_BIL": "first",
-    }
-    for t in tickers_vti:
-        agg_dict[f"R_{t}"] = lambda x, symbol=t: (1 + x).prod() - 1
-
-    monthly_df = df_daily.resample("ME").agg(agg_dict)
-    win_rate = (monthly_df["Strat_Ret"] > monthly_df["VTI_Ret"]).mean() * 100
-
-    # 5. 畫面呈現
-    col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "相對 RSI 策略總報酬",
-        f"{strat_total_return:.2f}%",
-        f"年化 CAGR: {strat_cagr:.2f}%",
-    )
-    col2.metric(
-        "VTI 買入持有總報酬",
-        f"{vti_total_return:.2f}%",
-        f"年化 CAGR: {vti_cagr:.2f}%",
-    )
-    col3.metric("月度超越 VTI 勝率", f"{win_rate:.2f}%")
-
-    st.write("")
-    col4, col5 = st.columns(2)
-    col4.metric("策略最大回撤 (Max Drawdown)", f"{strat_mdd:.2f}%")
-    col5.metric("VTI 基準最大回撤 (Max Drawdown)", f"{vti_mdd:.2f}%")
-
-    st.write("### 📈 累積淨值走勢比較 (基期 = 1.0)")
-    st.line_chart(
-        pd.DataFrame(
-            {
-                "相對 RSI 均值回歸策略": strat_cum,
-                "VTI Buy & Hold 基準": vti_cum,
-            }
-        )
-    )
-
-    st.write("### 📉 風險水庫：水面下回撤走勢圖 (Drawdown %)")
-    st.line_chart(
-        pd.DataFrame(
-            {
-                "策略 Drawdown (%)": strat_dd_series,
-                "VTI 基準 Drawdown (%)": vti_dd_series,
-            }
-        )
-    )
-
-    # 6. 相對 RSI 圖表
-    st.write("---")
-    st.subheader(
-        "📊 相對強度 RSI (Ratio RSI) 歷史對照圖 (SMH/VTI & IWM/VTI)"
-    )
-    tab_rel1, tab_rel2 = st.tabs(["SMH / VTI 相對 RSI", "IWM / VTI 相對 RSI"])
-
-    with tab_rel1:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "SMH/VTI 相對 14日 RSI": rel_rsi_smh.loc[exec_dates],
-                    "超跌買入門檻": rel_rsi_oversold,
-                }
-            )
-        )
-
-    with tab_rel2:
-        st.line_chart(
-            pd.DataFrame(
-                {
-                    "IWM/VTI 相對 14日 RSI": rel_rsi_iwm.loc[exec_dates],
-                    "超跌買入門檻": rel_rsi_oversold,
-                }
-            )
-        )
-
-    st.write("---")
-    st.subheader(
-        "📋 每月詳細策略報酬與各 ETF 獨立月報酬歷程 (T+1 執行對齊)"
-    )
-
-    monthly_display = monthly_df.copy()
-    monthly_display.index = monthly_display.index.strftime("%Y-%m-%d")
-
-    monthly_display["策略月報酬"] = (
-        monthly_display["Strat_Ret"] * 100
-    ).map("{:.2f}%".format)
-    monthly_display["VTI 月報酬"] = (
-        monthly_display["VTI_Ret"] * 100
-    ).map("{:.2f}%".format)
-    monthly_display["月度勝負"] = np.where(
-        monthly_display["Strat_Ret"] > monthly_display["VTI_Ret"],
-        "🏆 擊敗 VTI",
-        "🔻 落後 VTI",
-    )
-
-    for t in tickers_vti:
-        monthly_display[f"{t} 月報酬"] = (
-            monthly_display[f"R_{t}"] * 100
-        ).map("{:.2f}%".format)
-        if t != "VTI":
-            monthly_display[f"W_{t}"] = (
-                monthly_display[f"W_{t}"] * 100
-            ).map("{:.0f}%".format)
-
-    monthly_display = monthly_display.rename(
-        columns={
-            "Mode": "當月執行模式",
-            "W_IVV": "IVV 權重",
-            "W_SMH": "SMH 權重",
-            "W_IWM": "IWM 權重",
-            "W_BIL": "BIL 權重",
-        }
-    )
-
-    table_cols = [
-        "當月執行模式",
-        "策略月報酬",
-        "VTI 月報酬",
-        "月度勝負",
-        "IVV 月報酬",
-        "SMH 月報酬",
-        "IWM 月報酬",
-        "BIL 月報酬",
-        "IVV 權重",
-        "SMH 權重",
-        "IWM 權重",
-        "BIL 權重",
-    ]
-    st.dataframe(
-        monthly_display[table_cols].sort_index(ascending=False),
-        use_container_width=True,
-    )
+    exec
