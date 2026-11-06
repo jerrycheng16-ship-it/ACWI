@@ -7,41 +7,41 @@ import yfinance as yf
 # 0. 頁面總體配置
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="均值回歸與均線過濾戰術輪動系統",
+    page_title="相對 RSI (Ratio RSI) 均值回歸戰術系統",
     layout="wide",
 )
 
 # ---------------------------------------------------------
-# 側邊欄：策略與動態均值回歸參數
+# 側邊欄：相對 RSI 參數設定
 # ---------------------------------------------------------
-st.sidebar.title("🎯 均值回歸戰術參數設定")
+st.sidebar.title("🎯 相對 RSI (Relative RSI) 參數")
 
-st.sidebar.subheader("⚙️ 均線過濾網與 RSI 超買超賣觸發")
+st.sidebar.subheader("⚙️ 均線過濾與相對 RSI 超買超賣門檻")
 filter_ma_window = st.sidebar.slider(
     "均線過濾網天數 (MA Filter)",
     min_value=20,
     max_value=250,
     value=130,
     step=10,
-    help="確保低勝率資產已止跌打底，站在均線上才允許逢低加碼，避免價值陷阱",
+    help="確保標的本身高於均線，避免價值陷阱",
 )
 
-rsi_oversold = st.sidebar.slider(
-    "超跌買入門檻 (RSI 門檻)",
+rel_rsi_oversold = st.sidebar.slider(
+    "相對 RSI 超跌抄底門檻",
     min_value=20,
     max_value=45,
     value=35,
     step=5,
-    help="當低勝率資產 RSI 低於此數值時，觸發均值回歸逆勢加碼",
+    help="當 SMH/VTI 或 IWM/VTI 的 RSI 低於此門檻時觸發抄底",
 )
 
-rsi_overbought = st.sidebar.slider(
-    "高檔獲利了結門檻 (RSI 門檻)",
+rel_rsi_overbought = st.sidebar.slider(
+    "相對 RSI 超買獲利了結門檻",
     min_value=60,
     max_value=85,
     value=70,
     step=5,
-    help="當低勝率資產 RSI 高於此數值時，獲利了結轉回 IVV 核心",
+    help="當相對 RSI 高於此門檻時獲利了結轉回 IVV/VTI",
 )
 
 st.sidebar.write("---")
@@ -85,25 +85,25 @@ def get_drawdown_series(cum_returns):
 
 
 # =========================================================
-# 主程式：VTI 均值回歸加強戰術策略
+# 主程式：對標 VTI 的相對 RSI (Ratio RSI) 戰術系統
 # =========================================================
-st.title("🔄 反向均值回歸與均線過濾戰術系統 (對標 VTI)")
+st.title("⚖️ 相對強度 (SMH/VTI & IWM/VTI) RSI 均值回歸戰術系統")
 
-with st.expander("🏷️ 點此查看：均值回歸與價值陷阱防禦邏輯說明"):
+with st.expander("🏷️ 點此查看：相對 RSI (Ratio RSI) 邏輯說明"):
     st.markdown(
         f"""
-    ### 📌 策略設計原理 (Anti-Trend & Filtered Mean Reversion)
-    針對 **IVV (美股大盤)** 勝率高、而 **SMH (半導體)** 與 **IWM (小型股)** 滾動勝率低於五成的特性設計：
-    * **核心常態底倉**：預設持有 `85% IVV` 作為高勝率核心引擎。
-    * **逢低抄底機制 (Mean Reversion Buy)**：當 IWM 或 SMH 的 RSI 低於 `{rsi_oversold}`，且股價**高於 {filter_ma_window}MA (無崩盤危機，已止跌)**，撥出 15%~30% 資金逆勢加碼。
-    * **高檔獲利了結 (Profit Take)**：當 RSI > `{rsi_overbought}` 時全數獲利了結，資金 100% 轉回 IVV 避開後續拉回。
-    * **無前視偏誤 (No Look-Ahead Bias)**：完全採納 **T+1 日滯後執行 (Shift-1)**。
+    ### 📌 相對強度 RSI 策略設計原理 (Relative Strength RSI Reversion)
+    本策略不再單純監控單一 ETF 的 RSI，而是監控 **「相對大盤 (VTI) 的比值 RSI」**[cite: 9]：
+    * **`SMH / VTI Ratio`**：評估半導體相較於整體美股的超買/超賣強度[cite: 9]。
+    * **`IWM / VTI Ratio`**：評估小型股相較於整體美股的強弱輪動[cite: 9]。
+    * **抄底機制**：當 `SMH/VTI` 的 RSI < `{rel_rsi_oversold}`，且 SMH 股價在 `{filter_ma_window}MA` 之上時，代表**半導體相對大盤極度超跌但長期趨勢未壞**，觸發加碼。
+    * **無前視偏誤 (No Look-Ahead Bias)**：嚴格實施 **T+1 日滯後執行 (Shift-1)**。
     """
     )
 
 tickers_vti = ["VTI", "IVV", "SMH", "IWM", "BIL"]
 
-with st.spinner("正在讀取歷史數據並計算 RSI 與均線過濾指標..."):
+with st.spinner("正在讀取歷史數據並計算 SMH/VTI 與 IWM/VTI 相對 RSI..."):
     try:
         data = load_etf_data(tickers_vti, start_date, end_date)
     except Exception as e:
@@ -114,41 +114,43 @@ if data.empty or len(data) < filter_ma_window:
     st.error(f"❌ 歷史數據不足 {filter_ma_window} 天，無法執行回測。")
     st.stop()
 
-# 計算技術指標
+# 1. 計算相對比值 Series (Ratio)
+ratio_smh_vti = data["SMH"] / data["VTI"]
+ratio_iwm_vti = data["IWM"] / data["VTI"]
+
+# 2. 計算相對比值的 14 日 RSI
+rel_rsi_smh = calculate_rsi(ratio_smh_vti, period=14)
+rel_rsi_iwm = calculate_rsi(ratio_iwm_vti, period=14)
+
+# 均線過濾網 (絕對股價 vs 均線)
 ma_filter = data.rolling(window=filter_ma_window).mean()
-rsi_smh = calculate_rsi(data["SMH"], period=14)
-rsi_iwm = calculate_rsi(data["IWM"], period=14)
 returns = data.pct_change().fillna(0)
 
-# 逐日產生訊號與目標權重
+# 3. 逐日產生目標權重
 target_weights = []
 modes = []
 
 for d in data.index:
-    # 判斷是否高於均線 (止跌過濾)
     smh_above_ma = data.loc[d, "SMH"] > ma_filter.loc[d, "SMH"]
     iwm_above_ma = data.loc[d, "IWM"] > ma_filter.loc[d, "IWM"]
 
-    c_smh_rsi = rsi_smh.loc[d]
-    c_iwm_rsi = rsi_iwm.loc[d]
+    c_smh_rel_rsi = rel_rsi_smh.loc[d]
+    c_iwm_rel_rsi = rel_rsi_iwm.loc[d]
 
-    # 1. 超跌抄底條件：RSI 小於超賣門檻 且 站在均線之上
-    smh_buy_signal = (c_smh_rsi < rsi_oversold) and smh_above_ma
-    iwm_buy_signal = (c_iwm_rsi < rsi_oversold) and iwm_above_ma
+    smh_buy_signal = (c_smh_rel_rsi < rel_rsi_oversold) and smh_above_ma
+    iwm_buy_signal = (c_iwm_rel_rsi < rel_rsi_oversold) and iwm_above_ma
 
-    # 2. 決定動態權重
     if smh_buy_signal and not iwm_buy_signal:
-        mode = "加碼 SMH (逆勢抄底)"
+        mode = "SMH/VTI 相對超跌 ➔ 加碼 SMH"
         w = [0.00, 0.70, 0.30, 0.00, 0.00]
     elif iwm_buy_signal and not smh_buy_signal:
-        mode = "加碼 IWM (逆勢抄底)"
+        mode = "IWM/VTI 相對超跌 ➔ 加碼 IWM"
         w = [0.00, 0.70, 0.00, 0.30, 0.00]
     elif smh_buy_signal and iwm_buy_signal:
-        mode = "雙資產抄底"
+        mode = "雙資產相對超跌 ➔ 雙重加碼"
         w = [0.00, 0.60, 0.20, 0.20, 0.00]
     else:
-        # 預設回到高勝率美股核心 IVV
-        mode = "IVV 核心常態持股"
+        mode = "常態持股 (IVV 85% + SMH 15%)"
         w = [0.00, 0.85, 0.15, 0.00, 0.00]
 
     modes.append(mode)
@@ -158,10 +160,15 @@ df_w_target = pd.DataFrame(
     target_weights, index=data.index, columns=tickers_vti
 )
 df_signals = pd.DataFrame(
-    {"Mode": modes, "RSI_SMH": rsi_smh, "RSI_IWM": rsi_iwm}, index=data.index
+    {
+        "Mode": modes,
+        "Rel_RSI_SMH": rel_rsi_smh,
+        "Rel_RSI_IWM": rel_rsi_iwm,
+    },
+    index=data.index,
 )
 
-# 實施 Lag-1 滯後處理 (消除前視偏誤)
+# 4. Lag-1 Shift 消除前視偏誤
 df_w_executed = df_w_target.shift(1).dropna()
 exec_dates = df_w_executed.index[
     df_w_executed.index >= data.index[filter_ma_window]
@@ -179,8 +186,8 @@ for d in exec_dates:
     rec = {
         "Date": d,
         "Mode": mode_applied,
-        "RSI_SMH": f"{df_signals.loc[d, 'RSI_SMH']:.1f}",
-        "RSI_IWM": f"{df_signals.loc[d, 'RSI_IWM']:.1f}",
+        "Rel_RSI_SMH": f"{df_signals.loc[d, 'Rel_RSI_SMH']:.1f}",
+        "Rel_RSI_IWM": f"{df_signals.loc[d, 'Rel_RSI_IWM']:.1f}",
         "Strat_Ret": strat_ret,
         "VTI_Ret": vti_ret,
         "W_IVV": strat_w["IVV"],
@@ -230,11 +237,11 @@ monthly_df = df_daily.resample("ME").agg(agg_dict)
 win_rate = (monthly_df["Strat_Ret"] > monthly_df["VTI_Ret"]).mean() * 100
 
 # ---------------------------------------------------------
-# 畫面呈現：KPI 指標與核心圖表
+# 5. 畫面呈現：KPI 指標與核心圖表
 # ---------------------------------------------------------
 col1, col2, col3 = st.columns(3)
 col1.metric(
-    "均值回歸策略總報酬",
+    "相對 RSI 策略總報酬",
     f"{strat_total_return:.2f}%",
     f"年化 CAGR: {strat_cagr:.2f}%",
 )
@@ -254,7 +261,7 @@ st.write("### 📈 累積淨值走勢比較 (基期 = 1.0)")
 st.line_chart(
     pd.DataFrame(
         {
-            "均值回歸過濾策略": strat_cum,
+            "相對 RSI 均值回歸策略": strat_cum,
             "VTI Buy & Hold 基準": vti_cum,
         }
     )
@@ -271,30 +278,38 @@ st.line_chart(
 )
 
 # ---------------------------------------------------------
-# 7. RSI 水準對照圖 (SMH & IWM RSI 走勢)
+# 6. 相對 RSI (SMH/VTI & IWM/VTI) 專屬視圖
 # ---------------------------------------------------------
 st.write("---")
-st.subheader("📊 RSI 指標水準歷史走勢與超買/超賣門檻對照 (14日 RSI)")
-tab_rsi1, tab_rsi2 = st.tabs(["SMH (半導體) RSI", "IWM (小型股) RSI"])
+st.subheader(
+    "📊 相對強度 RSI (Ratio RSI) 歷史對照圖 (SMH/VTI & IWM/VTI)"
+)
+tab_rel1, tab_rel2 = st.tabs(["SMH / VTI 相對 RSI", "IWM / VTI 相對 RSI"])
 
-with tab_rsi1:
-    df_rsi_smh_plot = pd.DataFrame({
-        "SMH 14日 RSI": rsi_smh.loc[exec_dates],
-        "超賣買入門檻": rsi_oversold,
-        "超買獲利了結門檻": rsi_overbought,
-    })
-    st.line_chart(df_rsi_smh_plot)
+with tab_rel1:
+    df_rel_smh_plot = pd.DataFrame(
+        {
+            "SMH/VTI 相對 14日 RSI": rel_rsi_smh.loc[exec_dates],
+            "相對超跌買入門檻": rel_rsi_oversold,
+            "相對超買賣出門檻": rel_rsi_overbought,
+        }
+    )
+    st.line_chart(df_rel_smh_plot)
 
-with tab_rsi2:
-    df_rsi_iwm_plot = pd.DataFrame({
-        "IWM 14日 RSI": rsi_iwm.loc[exec_dates],
-        "超賣買入門檻": rsi_oversold,
-        "超買獲利了結門檻": rsi_overbought,
-    })
-    st.line_chart(df_rsi_iwm_plot)
+with tab_rel2:
+    df_rel_iwm_plot = pd.DataFrame(
+        {
+            "IWM/VTI 相對 14日 RSI": rel_rsi_iwm.loc[exec_dates],
+            "相對超跌買入門檻": rel_rsi_oversold,
+            "相對超買賣出門檻": rel_rsi_overbought,
+        }
+    )
+    st.line_chart(df_rel_iwm_plot)
 
 st.write("---")
-st.subheader("📋 每月詳細策略報酬與各 ETF 獨立月報酬歷程 (T+1 執行對齊)")
+st.subheader(
+    "📋 每月詳細策略報酬與各 ETF 獨立月報酬歷程 (T+1 執行對齊)"
+)
 
 monthly_display = monthly_df.copy()
 monthly_display.index = monthly_display.index.strftime("%Y-%m-%d")
