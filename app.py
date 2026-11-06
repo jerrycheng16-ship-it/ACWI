@@ -8,7 +8,7 @@ import yfinance as yf
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="雙核心 ETF Canary 戰術輪動與對標回測系統",
-    layout="wide"
+    layout="wide",
 )
 
 # ---------------------------------------------------------
@@ -46,7 +46,6 @@ def load_etf_data(symbols, start, end):
     else:
         df = raw_df
 
-    # 對齊所有標的並補齊休市日數據
     df = df.reindex(columns=symbols).ffill().bfill()
     return df
 
@@ -57,12 +56,11 @@ def get_drawdown_series(cum_returns):
 
 
 # =========================================================
-# 策略一：ACWI 全球戰術輪動策略 (以 EPP 替代原 IAPD)
+# 策略一：ACWI 全球戰術輪動策略 (含各 ETF 月報酬明細)
 # =========================================================
 if "ACWI" in strategy_choice:
     st.title("🌐 ACWI 全球戰術輪動與基準對標系統")
 
-    # 標的改用 EPP (亞太不含日本) 替換 IAPD
     tickers_acwi = ["IVV", "VGK", "EWJ", "EPP", "IEMG", "BIL"]
     benchmark_weights_acwi = pd.Series(
         [0.63, 0.13, 0.05, 0.09, 0.11, 0.00], index=tickers_acwi
@@ -127,22 +125,24 @@ if "ACWI" in strategy_choice:
 
         strat_ret = (daily_ret * strat_w).sum()
 
-        daily_records.append(
-            {
-                "Date": d,
-                "Mode": mode,
-                "Canary_IEMG": "🟢 均線上" if c_iemg else "🔴 均線下",
-                "Canary_EPP": "🟢 均線上" if c_epp else "🔴 均線下",
-                "Strat_Ret": strat_ret,
-                "BM_Ret": bm_ret,
-                "W_IVV": strat_w["IVV"],
-                "W_VGK": strat_w["VGK"],
-                "W_EWJ": strat_w["EWJ"],
-                "W_EPP": strat_w["EPP"],
-                "W_IEMG": strat_w["IEMG"],
-                "W_BIL": strat_w["BIL"],
-            }
-        )
+        rec = {
+            "Date": d,
+            "Mode": mode,
+            "Canary_IEMG": "🟢 均線上" if c_iemg else "🔴 均線下",
+            "Canary_EPP": "🟢 均線上" if c_epp else "🔴 均線下",
+            "Strat_Ret": strat_ret,
+            "BM_Ret": bm_ret,
+            "W_IVV": strat_w["IVV"],
+            "W_VGK": strat_w["VGK"],
+            "W_EWJ": strat_w["EWJ"],
+            "W_EPP": strat_w["EPP"],
+            "W_IEMG": strat_w["IEMG"],
+            "W_BIL": strat_w["BIL"],
+        }
+        for t in tickers_acwi:
+            rec[f"R_{t}"] = daily_ret[t]
+
+        daily_records.append(rec)
 
     df_daily = pd.DataFrame(daily_records).set_index("Date")
 
@@ -164,24 +164,27 @@ if "ACWI" in strategy_choice:
     strat_mdd = strat_dd_series.min()
     bm_mdd = bm_dd_series.min()
 
-    monthly_df = df_daily.resample("ME").agg(
-        {
-            "Strat_Ret": lambda x: (1 + x).prod() - 1,
-            "BM_Ret": lambda x: (1 + x).prod() - 1,
-            "Mode": "last",
-            "Canary_IEMG": "last",
-            "Canary_EPP": "last",
-            "W_IVV": "last",
-            "W_VGK": "last",
-            "W_EWJ": "last",
-            "W_EPP": "last",
-            "W_IEMG": "last",
-            "W_BIL": "last",
-        }
-    )
+    # 計算月度資料（包含各 ETF 當月獨立報酬）
+    agg_dict = {
+        "Strat_Ret": lambda x: (1 + x).prod() - 1,
+        "BM_Ret": lambda x: (1 + x).prod() - 1,
+        "Mode": "last",
+        "Canary_IEMG": "last",
+        "Canary_EPP": "last",
+        "W_IVV": "last",
+        "W_VGK": "last",
+        "W_EWJ": "last",
+        "W_EPP": "last",
+        "W_IEMG": "last",
+        "W_BIL": "last",
+    }
+    for t in tickers_acwi:
+        agg_dict[f"R_{t}"] = lambda x, symbol=t: (1 + x).prod() - 1
+
+    monthly_df = df_daily.resample("ME").agg(agg_dict)
     win_rate = (monthly_df["Strat_Ret"] > monthly_df["BM_Ret"]).mean() * 100
 
-    # 畫面展示
+    # KPI 畫面
     col1, col2, col3 = st.columns(3)
     col1.metric(
         "策略累積總報酬",
@@ -252,10 +255,13 @@ if "ACWI" in strategy_choice:
 
     st.write("---")
     st.subheader(
-        "📋 每月詳細策略報酬與配置歷程 (Monthly History Breakdown)"
+        "📋 每月詳細策略報酬、對標與各 ETF 獨立月報酬歷程 (Monthly History Breakdown)"
     )
 
     monthly_display = monthly_df.copy()
+    # 格式化日期只顯示 YYYY-MM-DD
+    monthly_display.index = monthly_display.index.strftime("%Y-%m-%d")
+
     monthly_display["策略月報酬"] = (
         monthly_display["Strat_Ret"] * 100
     ).map("{:.2f}%".format)
@@ -268,15 +274,12 @@ if "ACWI" in strategy_choice:
         "🔻 落後 ACWI",
     )
 
-    for col in [
-        "W_IVV",
-        "W_VGK",
-        "W_EWJ",
-        "W_EPP",
-        "W_IEMG",
-        "W_BIL",
-    ]:
-        monthly_display[col] = (monthly_display[col] * 100).map(
+    # 各 ETF 獨立月報酬格式化
+    for t in tickers_acwi:
+        monthly_display[f"{t} 月報酬"] = (
+            monthly_display[f"R_{t}"] * 100
+        ).map("{:.2f}%".format)
+        monthly_display[f"W_{t}"] = (monthly_display[f"W_{t}"] * 100).map(
             "{:.0f}%".format
         )
 
@@ -299,6 +302,12 @@ if "ACWI" in strategy_choice:
         "策略月報酬",
         "ACWI 月報酬",
         "月度勝負",
+        "IVV 月報酬",
+        "VGK 月報酬",
+        "EWJ 月報酬",
+        "EPP 月報酬",
+        "IEMG 月報酬",
+        "BIL 月報酬",
         "IEMG 訊號",
         "EPP 訊號",
         "IVV 權重",
@@ -315,7 +324,7 @@ if "ACWI" in strategy_choice:
 
 
 # =========================================================
-# 策略二：VTI 美股加強輪動策略
+# 策略二：VTI 美股加強輪動策略 (含各 ETF 月報酬明細)
 # =========================================================
 else:
     st.title("🚀 VTI 美股核心加強型戰術輪動系統")
@@ -386,20 +395,22 @@ else:
 
         strat_ret = (daily_ret * strat_w).sum()
 
-        daily_records.append(
-            {
-                "Date": d,
-                "Mode": mode,
-                "Canary_SMH": "🟢 均線上" if c_smh else "🔴 均線下",
-                "Canary_IWM": "🟢 均線上" if c_iwm else "🔴 均線下",
-                "Strat_Ret": strat_ret,
-                "VTI_Ret": vti_ret,
-                "W_IVV": strat_w["IVV"],
-                "W_SMH": strat_w["SMH"],
-                "W_IWM": strat_w["IWM"],
-                "W_BIL": strat_w["BIL"],
-            }
-        )
+        rec = {
+            "Date": d,
+            "Mode": mode,
+            "Canary_SMH": "🟢 均線上" if c_smh else "🔴 均線下",
+            "Canary_IWM": "🟢 均線上" if c_iwm else "🔴 均線下",
+            "Strat_Ret": strat_ret,
+            "VTI_Ret": vti_ret,
+            "W_IVV": strat_w["IVV"],
+            "W_SMH": strat_w["SMH"],
+            "W_IWM": strat_w["IWM"],
+            "W_BIL": strat_w["BIL"],
+        }
+        for t in tickers_vti:
+            rec[f"R_{t}"] = daily_ret[t]
+
+        daily_records.append(rec)
 
     df_daily = pd.DataFrame(daily_records).set_index("Date")
 
@@ -421,19 +432,21 @@ else:
     strat_mdd = strat_dd_series.min()
     vti_mdd = vti_dd_series.min()
 
-    monthly_df = df_daily.resample("ME").agg(
-        {
-            "Strat_Ret": lambda x: (1 + x).prod() - 1,
-            "VTI_Ret": lambda x: (1 + x).prod() - 1,
-            "Mode": "last",
-            "Canary_SMH": "last",
-            "Canary_IWM": "last",
-            "W_IVV": "last",
-            "W_SMH": "last",
-            "W_IWM": "last",
-            "W_BIL": "last",
-        }
-    )
+    agg_dict = {
+        "Strat_Ret": lambda x: (1 + x).prod() - 1,
+        "VTI_Ret": lambda x: (1 + x).prod() - 1,
+        "Mode": "last",
+        "Canary_SMH": "last",
+        "Canary_IWM": "last",
+        "W_IVV": "last",
+        "W_SMH": "last",
+        "W_IWM": "last",
+        "W_BIL": "last",
+    }
+    for t in tickers_vti:
+        agg_dict[f"R_{t}"] = lambda x, symbol=t: (1 + x).prod() - 1
+
+    monthly_df = df_daily.resample("ME").agg(agg_dict)
     win_rate = (monthly_df["Strat_Ret"] > monthly_df["VTI_Ret"]).mean() * 100
 
     col1, col2, col3 = st.columns(3)
@@ -464,7 +477,7 @@ else:
         )
     )
 
-    st.write("### 📉 風興水庫：水面下回撤走勢圖 (Drawdown %)")
+    st.write("### 📉 風險水庫：水面下回撤走勢圖 (Drawdown %)")
     st.line_chart(
         pd.DataFrame(
             {
@@ -509,10 +522,12 @@ else:
 
     st.write("---")
     st.subheader(
-        "📋 每月詳細策略報酬與配置歷程 (Monthly History Breakdown)"
+        "📋 每月詳細策略報酬、對標與各 ETF 獨立月報酬歷程 (Monthly History Breakdown)"
     )
 
     monthly_display = monthly_df.copy()
+    monthly_display.index = monthly_display.index.strftime("%Y-%m-%d")
+
     monthly_display["策略月報酬"] = (
         monthly_display["Strat_Ret"] * 100
     ).map("{:.2f}%".format)
@@ -525,10 +540,14 @@ else:
         "🔻 落後 VTI",
     )
 
-    for col in ["W_IVV", "W_SMH", "W_IWM", "W_BIL"]:
-        monthly_display[col] = (monthly_display[col] * 100).map(
-            "{:.0f}%".format
-        )
+    for t in tickers_vti:
+        monthly_display[f"{t} 月報酬"] = (
+            monthly_display[f"R_{t}"] * 100
+        ).map("{:.2f}%".format)
+        if t != "VTI":
+            monthly_display[f"W_{t}"] = (
+                monthly_display[f"W_{t}"] * 100
+            ).map("{:.0f}%".format)
 
     monthly_display = monthly_display.rename(
         columns={
@@ -547,6 +566,10 @@ else:
         "策略月報酬",
         "VTI 月報酬",
         "月度勝負",
+        "IVV 月報酬",
+        "SMH 月報酬",
+        "IWM 月報酬",
+        "BIL 月報酬",
         "SMH 訊號",
         "IWM 訊號",
         "IVV 權重",
