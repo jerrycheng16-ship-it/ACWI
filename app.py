@@ -93,9 +93,9 @@ with st.expander("🏷️ 點此查看：均值回歸與價值陷阱防禦邏輯
     st.markdown(
         f"""
     ### 📌 策略設計原理 (Anti-Trend & Filtered Mean Reversion)
-    針對 **IVV (美股大盤)** 胜率高、而 **SMH (半導體)** 與 **IWM (小型股)** 滾動胜率低於五成的特性設計：
-    * **核心常態底倉**：預設持有 `80% IVV` 作為高胜率核心引擎。
-    * **逢低抄底機制 (Mean Reversion Buy)**：當 IWM 或 SMH 的 RSI 低於 `{rsi_oversold}`，且股價**高於 {filter_ma_window}MA (無崩盤危機，已止跌)**，撥出 20% 資金逆勢加碼。
+    針對 **IVV (美股大盤)** 勝率高、而 **SMH (半導體)** 與 **IWM (小型股)** 滾動勝率低於五成的特性設計：
+    * **核心常態底倉**：預設持有 `85% IVV` 作為高勝率核心引擎。
+    * **逢低抄底機制 (Mean Reversion Buy)**：當 IWM 或 SMH 的 RSI 低於 `{rsi_oversold}`，且股價**高於 {filter_ma_window}MA (無崩盤危機，已止跌)**，撥出 15%~30% 資金逆勢加碼。
     * **高檔獲利了結 (Profit Take)**：當 RSI > `{rsi_overbought}` 時全數獲利了結，資金 100% 轉回 IVV 避開後續拉回。
     * **無前視偏誤 (No Look-Ahead Bias)**：完全採納 **T+1 日滯後執行 (Shift-1)**。
     """
@@ -269,6 +269,29 @@ st.line_chart(
         }
     )
 )
+
+# ---------------------------------------------------------
+# 7. RSI 水準對照圖 (SMH & IWM RSI 走勢)
+# ---------------------------------------------------------
+st.write("---")
+st.subheader("📊 RSI 指標水準歷史走勢與超買/超賣門檻對照 (14日 RSI)")
+tab_rsi1, tab_rsi2 = st.tabs(["SMH (半導體) RSI", "IWM (小型股) RSI"])
+
+with tab_rsi1:
+    df_rsi_smh_plot = pd.DataFrame({
+        "SMH 14日 RSI": rsi_smh.loc[exec_dates],
+        "超賣買入門檻": rsi_oversold,
+        "超買獲利了結門檻": rsi_overbought,
+    })
+    st.line_chart(df_rsi_smh_plot)
+
+with tab_rsi2:
+    df_rsi_iwm_plot = pd.DataFrame({
+        "IWM 14日 RSI": rsi_iwm.loc[exec_dates],
+        "超賣買入門檻": rsi_oversold,
+        "超買獲利了結門檻": rsi_overbought,
+    })
+    st.line_chart(df_rsi_iwm_plot)
 
 st.write("---")
 st.subheader("📋 每月詳細策略報酬與各 ETF 獨立月報酬歷程 (T+1 執行對齊)")
