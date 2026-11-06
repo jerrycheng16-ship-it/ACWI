@@ -305,6 +305,34 @@ if "ACWI" in strategy_choice:
         )
     )
 
+    # ACWI 最新訊號卡片
+    st.write("---")
+    st.subheader("🔔 當前 11 月最新金絲雀訊號與推薦配置 (即時最新交易日)")
+    latest_date = data.index[-1]
+    latest_mode = df_signals.loc[latest_date, "Mode"]
+    latest_iemg = (
+        "🟢 均線上"
+        if df_signals.loc[latest_date, "Canary_IEMG"]
+        else "🔴 均線下"
+    )
+    latest_epp = (
+        "🟢 均線上"
+        if df_signals.loc[latest_date, "Canary_EPP"]
+        else "🔴 均線下"
+    )
+    latest_w = df_w_target.loc[latest_date]
+
+    c_rec1, c_rec2, c_rec3 = st.columns(3)
+    c_rec1.info(
+        f"**最新交易日**: {latest_date.strftime('%Y-%m-%d')}\n\n**當前市場模式**: {latest_mode}"
+    )
+    c_rec2.warning(
+        f"**IEMG Canary**: {latest_iemg}\n\n**EPP Canary**: {latest_epp}"
+    )
+    c_rec3.success(
+        f"**建議 11 月配置**:\n\nIVV: {latest_w['IVV']*100:.0f}% | VGK: {latest_w['VGK']*100:.0f}% | EWJ: {latest_w['EWJ']*100:.0f}%\n\nEPP: {latest_w['EPP']*100:.0f}% | IEMG: {latest_w['IEMG']*100:.0f}% | BIL: {latest_w['BIL']*100:.0f}%"
+    )
+
     st.write("---")
     st.subheader(
         "📋 每月詳細策略報酬與各 ETF 獨立月報酬歷程 (T+1 執行對齊)"
@@ -586,6 +614,28 @@ else:
                 "VTI 基準 Drawdown (%)": vti_dd_series,
             }
         )
+    )
+
+    # ---------------------------------------------------------
+    # 🆕 VTI 策略專屬：當前 11 月最新即時訊號與推薦配置卡片
+    # ---------------------------------------------------------
+    st.write("---")
+    st.subheader("🔔 當前 11 月最新交易訊號與建倉推薦配置 (即時盤後)")
+    latest_date_vti = data.index[-1]
+    latest_mode_vti = df_signals.loc[latest_date_vti, "Mode"]
+    latest_rsi_smh_val = rel_rsi_smh.loc[latest_date_vti]
+    latest_rsi_iwm_val = rel_rsi_iwm.loc[latest_date_vti]
+    latest_w_vti = df_w_target.loc[latest_date_vti]
+
+    v_rec1, v_rec2, v_rec3 = st.columns(3)
+    v_rec1.info(
+        f"**最新交易日**: {latest_date_vti.strftime('%Y-%m-%d')}\n\n**當前市場模式**: {latest_mode_vti}"
+    )
+    v_rec2.warning(
+        f"**SMH/VTI 相對 RSI**: {latest_rsi_smh_val:.1f}\n\n**IWM/VTI 相對 RSI**: {latest_rsi_iwm_val:.1f}"
+    )
+    v_rec3.success(
+        f"**建議 11 月配置比例**:\n\nIVV: {latest_w_vti['IVV']*100:.0f}% | SMH: {latest_w_vti['SMH']*100:.0f}%\n\nIWM: {latest_w_vti['IWM']*100:.0f}% | BIL: {latest_w_vti['BIL']*100:.0f}%"
     )
 
     # 6. 相對 RSI 圖表 (含進場/出場參考雙門檻)
