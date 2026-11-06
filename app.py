@@ -183,7 +183,7 @@ if "ACWI" in strategy_choice:
     for d in exec_dates:
         daily_ret = returns.loc[d]
         strat_w = df_w_executed.loc[d]
-        mode_applied = df_signals.loc[d, "Mode"]
+        mode_applied = df_signals.shift(1).loc[d, "Mode"]
 
         bm_ret = (daily_ret * benchmark_weights_acwi).sum()
         strat_ret = (daily_ret * strat_w).sum()
@@ -193,12 +193,12 @@ if "ACWI" in strategy_choice:
             "Mode": mode_applied,
             "Canary_IEMG": (
                 "🟢 均線上"
-                if df_signals.loc[d, "Canary_IEMG"]
+                if df_signals.shift(1).loc[d, "Canary_IEMG"]
                 else "🔴 均線下"
             ),
             "Canary_EPP": (
                 "🟢 均線上"
-                if df_signals.loc[d, "Canary_EPP"]
+                if df_signals.shift(1).loc[d, "Canary_EPP"]
                 else "🔴 均線下"
             ),
             "Strat_Ret": strat_ret,
@@ -235,7 +235,7 @@ if "ACWI" in strategy_choice:
     strat_mdd = strat_dd_series.min()
     bm_mdd = bm_dd_series.min()
 
-    # 月度彙整 (統一使用 first 對齊當月第一天實際執行的權重與模式)
+    # 月度彙整 (精準對齊當月第一天實際執行的模式與權重)
     agg_dict = {
         "Strat_Ret": lambda x: (1 + x).prod() - 1,
         "BM_Ret": lambda x: (1 + x).prod() - 1,
@@ -449,7 +449,7 @@ else:
     ma_filter = data.rolling(window=ma_window).mean()
     returns = data.pct_change().fillna(0)
 
-    # 3. 逐日產生目標權重
+    # 3. 逐日產生目標權重 (T 日產生的訊號)
     target_weights = []
     modes = []
 
@@ -497,8 +497,10 @@ else:
         index=data.index,
     )
 
-    # 4. Lag-1 Shift 消除前視偏誤
+    # 4. Lag-1 Shift 消除前視偏誤 (T 日產生的權重與模式，於 T+1 實施套用)
     df_w_executed = df_w_target.shift(1).dropna()
+    df_signals_executed = df_signals.shift(1).dropna()
+
     exec_dates = df_w_executed.index[
         df_w_executed.index >= data.index[ma_window]
     ]
@@ -507,7 +509,7 @@ else:
     for d in exec_dates:
         daily_ret = returns.loc[d]
         strat_w = df_w_executed.loc[d]
-        mode_applied = df_signals.loc[d, "Mode"]
+        mode_applied = df_signals_executed.loc[d, "Mode"]
 
         vti_ret = daily_ret["VTI"]
         strat_ret = (daily_ret * strat_w).sum()
@@ -515,8 +517,8 @@ else:
         rec = {
             "Date": d,
             "Mode": mode_applied,
-            "Rel_RSI_SMH": f"{df_signals.loc[d, 'Rel_RSI_SMH']:.1f}",
-            "Rel_RSI_IWM": f"{df_signals.loc[d, 'Rel_RSI_IWM']:.1f}",
+            "Rel_RSI_SMH": f"{df_signals_executed.loc[d, 'Rel_RSI_SMH']:.1f}",
+            "Rel_RSI_IWM": f"{df_signals_executed.loc[d, 'Rel_RSI_IWM']:.1f}",
             "Strat_Ret": strat_ret,
             "VTI_Ret": vti_ret,
             "W_IVV": strat_w["IVV"],
